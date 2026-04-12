@@ -2229,18 +2229,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       renderBots();
       renderConfigForm();
       renderConfigPreview();
-      // Re-render on the same candles the optimizer used — no re-fetch
-      if (source) {
-        const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, bot);
-        chartState.data = { ...pkg, smaData: buildSma(pkg.candles, 20) };
-        chartState.replaySignals = pkg.replaySignals;
-        chartState.replayEquityTimeline = pkg.replayEquityTimeline;
-        renderChartControls(bot, pkg.summary);
-        applyHistoryOrLiveFrame();
-        chartState.chart?.timeScale().fitContent();
-      } else {
-        void initChart(bot.id);
-      }
+      void initChart(bot.id);
     });
   });
 }
@@ -2386,14 +2375,7 @@ function setupChartParameterLab(bot) {
     renderBots();
     renderConfigForm();
     renderConfigPreview();
-    // Re-render on the same candles the optimizer used — no re-fetch
-    const bestPkg = buildReplayPackageFromCandles(source.candles, source.volumes, bot);
-    chartState.data = { ...bestPkg, smaData: buildSma(bestPkg.candles, 20) };
-    chartState.replaySignals = bestPkg.replaySignals;
-    chartState.replayEquityTimeline = bestPkg.replayEquityTimeline;
-    renderChartControls(bot, bestPkg.summary);
-    applyHistoryOrLiveFrame();
-    chartState.chart?.timeScale().fitContent();
+    void initChart(bot.id);
   };
 }
 
