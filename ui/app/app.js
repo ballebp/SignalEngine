@@ -1744,12 +1744,6 @@ function setupTimeframePills(bot) {
 }
 
 function renderChartControls(activeBot, summary) {
-  // Write live summary back to bot so renderHero/renderBots show current stats
-  activeBot.winRate  = summary.winRate;
-  activeBot.netPl    = summary.netPl;
-  activeBot.drawdown = summary.maxDrawdown;
-  activeBot.trades   = summary.trades;
-
   const tabs = document.getElementById('chart-bot-tabs');
   tabs.innerHTML = state.bots.map((bot) =>
     `<button class="chart-bot-tab ${bot.id === activeBot.id ? 'is-active' : ''}" data-bot-id="${bot.id}">${bot.name}</button>`
