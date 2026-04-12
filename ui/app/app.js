@@ -539,7 +539,6 @@ function renderConfigPreview() {
       sourceSymbols: [bot.source1, bot.source2, bot.source3, bot.source4],
     };
   }
-  };
 
   configPreview.textContent = JSON.stringify(normalized, null, 2);
 }
