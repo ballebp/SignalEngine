@@ -2147,19 +2147,25 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     container.innerHTML = '';
     return;
   }
+  const isH9S = bot.strategy === 'h9s';
 
   container.innerHTML = candidates
     .slice(0, 6)
-    .map((candidate, idx) => `
+    .map((candidate, idx) => {
+      const paramStr = isH9S
+        ? `Swing ${candidate.threshold} • ${candidate.bosConfType === 'wicks' ? 'Wicks' : 'Close'} • ${candidate.tpType === 'dynamic' ? 'Dyn TP' : `TP ${candidate.tp}% SL ${candidate.sl}%`}`
+        : `TP ${candidate.tp}% • SL ${candidate.sl}% • Th ${candidate.threshold}`;
+      return `
       <article class="optimizer-row">
         <div class="optimizer-rank">${idx + 1}</div>
         <div class="optimizer-main">
-          <strong>TP ${candidate.tp}% • SL ${candidate.sl}% • Th ${candidate.threshold}</strong>
+          <strong>${paramStr}</strong>
           <div class="optimizer-sub">${formatPercent(candidate.summary.netPl)} net • ${candidate.summary.maxDrawdown.toFixed(2)}% DD • ${candidate.summary.winRate.toFixed(2)}% WR • ${candidate.summary.trades} trades</div>
         </div>
         <button class="ghost-button replay-btn optimizer-apply" data-optimizer-index="${idx}" type="button">Apply</button>
       </article>
-    `)
+    `;
+    })
     .join('');
 
   container.querySelectorAll('[data-optimizer-index]').forEach((button) => {
@@ -2170,11 +2176,18 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       bot.tp = candidate.tp;
       bot.sl = candidate.sl;
       bot.threshold = candidate.threshold;
+      if (isH9S) {
+        bot.bosConfType = candidate.bosConfType;
+        bot.tpType = candidate.tpType;
+      }
       tpInput.value = String(candidate.tp);
       slInput.value = String(candidate.sl);
       thresholdInput.value = String(candidate.threshold);
       feedback.className = 'param-feedback good';
-      feedback.textContent = `Applied candidate #${idx + 1}: TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}.`;
+      const label = isH9S
+        ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}`
+        : `TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}`;
+      feedback.textContent = `Applied candidate #${idx + 1}: ${label}.`;
       saveSettings();
       renderHero();
       renderBots();
@@ -2249,19 +2262,42 @@ function setupChartParameterLab(bot) {
     const source = chartState.data
       ? { candles: chartState.data.candles, volumes: chartState.data.volumes }
       : (chartState.importedCandlesByBot[bot.id] || generateChartBars(bot, Math.max(2000, getDesiredHistoryBars())));
-    const tpCandidates = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.2, 3.0];
-    const slCandidates = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 9.0, 12.0];
-    const thCandidates = [65, 70, 75, 80, 85, 88, 90, 92, 95, 97];
     const candidates = [];
 
-    for (const tp of tpCandidates) {
-      for (const sl of slCandidates) {
-        for (const threshold of thCandidates) {
-          const testBot = { ...bot, tp, sl, threshold };
-          const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
-          const summary = pkg.summary;
-          const score = scoreOptimizationCandidate(summary);
-          candidates.push({ tp, sl, threshold, summary, score });
+    if (bot.strategy === 'h9s') {
+      const swingCandidates = [5, 10, 15, 20, 25, 30, 50, 75, 100, 150];
+      const bosConfCandidates = ['close', 'wicks'];
+      const tpTypeCandidates = ['dynamic', 'fixed'];
+      const tpCandidatesFixed = [0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5];
+      const slCandidatesFixed = [1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+      for (const threshold of swingCandidates) {
+        for (const bosConfType of bosConfCandidates) {
+          for (const tpType of tpTypeCandidates) {
+            const tpVals = tpType === 'dynamic' ? [1.0] : tpCandidatesFixed;
+            const slVals = tpType === 'dynamic' ? [1.0] : slCandidatesFixed;
+            for (const tp of tpVals) {
+              for (const sl of slVals) {
+                const testBot = { ...bot, threshold, bosConfType, tpType, tp, sl };
+                const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
+                const score = scoreOptimizationCandidate(pkg.summary);
+                candidates.push({ tp, sl, threshold, bosConfType, tpType, summary: pkg.summary, score });
+              }
+            }
+          }
+        }
+      }
+    } else {
+      const tpCandidates = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.2, 3.0];
+      const slCandidates = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 9.0, 12.0];
+      const thCandidates = [65, 70, 75, 80, 85, 88, 90, 92, 95, 97];
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
+            const score = scoreOptimizationCandidate(pkg.summary);
+            candidates.push({ tp, sl, threshold, summary: pkg.summary, score });
+          }
         }
       }
     }
@@ -2279,11 +2315,18 @@ function setupChartParameterLab(bot) {
     bot.tp = best.tp;
     bot.sl = best.sl;
     bot.threshold = best.threshold;
+    if (bot.strategy === 'h9s') {
+      bot.bosConfType = best.bosConfType;
+      bot.tpType = best.tpType;
+    }
     tpInput.value = String(best.tp);
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
+    const bestLabel = bot.strategy === 'h9s'
+      ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}`
+      : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
-    feedback.textContent = `AI best: TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
+    feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
     renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback);
     renderHero();
     renderBots();
