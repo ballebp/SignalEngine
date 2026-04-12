@@ -1,0 +1,19 @@
+{
+  "indicator_id": "AD1",
+  "symbol": "FARTCOINUSDT.P",
+  "timeframe": "5m",
+  "webhook_url": "https://signal-bridge-eight.vercel.app/",
+  "webhook_key": "Binance_Dem",
+  "alerts_enabled": true,
+  "request_format": "raw_text",
+  "take_profit_percent": 1.5,
+  "stop_loss_percent": 6.0,
+  "unusual_percentile_threshold": 90.0,
+  "history_limit": 500,
+  "source_symbols": {
+    "sym_1": "BINANCE:BTCUSDT",
+    "sym_2": "COINBASE:BTCUSD",
+    "sym_3": "KRAKEN:BTCUSD",
+    "sym_4": "BITSTAMP:BTCUSD"
+  }
+}

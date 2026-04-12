@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Signal Engine Dashboard</title>
+  <style>
+    :root {
+      --bg: #071018;
+      --bg-soft: #0b1722;
+      --panel: rgba(10, 22, 34, 0.92);
+      --panel-strong: #0e1d2b;
+      --line: rgba(120, 149, 175, 0.18);
+      --text: #e7f0f7;
+      --muted: #8da2b6;
+      --teal: #22d3c5;
+      --green: #2fdb72;
+      --red: #ff6464;
+      --amber: #f8b84e;
+      --shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(34, 211, 197, 0.09), transparent 28%),
+        radial-gradient(circle at top right, rgba(47, 219, 114, 0.08), transparent 24%),
+        linear-gradient(180deg, #061018 0%, #09131c 100%);
+      color: var(--text);
+    }
+
+    .shell {
+      width: min(1400px, calc(100vw - 32px));
+      margin: 20px auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      background: rgba(6, 14, 21, 0.88);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(34, 211, 197, 0.2), rgba(47, 219, 114, 0.16));
+      color: var(--teal);
+      font-size: 22px;
+      font-weight: 700;
+      border: 1px solid rgba(34, 211, 197, 0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0.02em;
+    }
+
+    .brand p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+      background: var(--green);
+      box-shadow: 0 0 12px rgba(47, 219, 114, 0.45);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.9fr 1fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .section {
+      padding: 18px;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .section-title h2,
+    .section-title h3 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #c4d3df;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(16, 29, 43, 0.96), rgba(10, 23, 34, 0.94));
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .value {
+      margin-top: 10px;
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .subvalue {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .positive {
+      color: var(--green);
+    }
+
+    .negative {
+      color: var(--red);
+    }
+
+    .bot-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bot-row {
+      display: grid;
+      grid-template-columns: 1.4fr 0.9fr 0.9fr 1fr 84px;
+      gap: 14px;
+      align-items: center;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(12, 24, 35, 0.88);
+    }
+
+    .bot-name {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .bot-meta {
+      margin-top: 4px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .pill {
+      justify-self: start;
+      padding: 7px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: rgba(34, 211, 197, 0.12);
+      color: var(--teal);
+      border: 1px solid rgba(34, 211, 197, 0.2);
+    }
+
+    .metric-block strong {
+      display: block;
+      font-size: 20px;
+    }
+
+    .metric-block span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toggle {
+      width: 56px;
+      height: 30px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(34, 211, 197, 0.85), rgba(47, 219, 114, 0.85));
+      position: relative;
+      justify-self: end;
+    }
+
+    .toggle::after {
+      content: "";
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #eff7fb;
+    }
+
+    .log-list,
+    .form-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .log-row,
+    .form-card,
+    .summary-card {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(12, 24, 35, 0.88);
+    }
+
+    .log-head,
+    .summary-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .log-head strong,
+    .summary-head strong {
+      font-size: 15px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .code {
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(5, 13, 20, 0.86);
+      color: #d7e4ef;
+      overflow-x: auto;
+    }
+
+    .fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .field .input {
+      padding: 12px 13px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(5, 13, 20, 0.88);
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .cta {
+      margin-top: 14px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: none;
+      color: #031219;
+      background: linear-gradient(135deg, var(--teal), #46f0b4);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .mini {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(5, 13, 20, 0.88);
+      border: 1px solid var(--line);
+    }
+
+    .mini strong {
+      display: block;
+      font-size: 20px;
+      margin-top: 8px;
+    }
+
+    @media (max-width: 1120px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .bot-row {
+        grid-template-columns: 1fr;
+      }
+
+      .toggle {
+        justify-self: start;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        width: min(100vw - 18px, 1400px);
+        margin: 10px auto;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+      }
+
+      .cards,
+      .fields,
+      .mini-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .value {
+        font-size: 28px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">S</div>
+        <div>
+          <h1>Signal Engine</h1>
+          <p>Standalone indicators, replay backtests, TradeRelay delivery</p>
+        </div>
+      </div>
+      <div class="statusbar">
+        <span><span class="dot"></span>Webhook healthy</span>
+        <span><span class="dot"></span>AD1 active</span>
+        <span><span class="dot"></span>Replay ready</span>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="section">
+          <div class="section-title">
+            <h2>Overview</h2>
+            <span class="small">TradeRelay-inspired shell</span>
+          </div>
+
+          <div class="cards">
+            <div class="card">
+              <div class="label">Indicators</div>
+              <div class="value">1</div>
+              <div class="subvalue">AD1 migrated</div>
+            </div>
+            <div class="card">
+              <div class="label">Backtest Runs</div>
+              <div class="value">24</div>
+              <div class="subvalue">Last 7 days</div>
+            </div>
+            <div class="card">
+              <div class="label">Win Rate</div>
+              <div class="value positive">84.44%</div>
+              <div class="subvalue">Selected config</div>
+            </div>
+            <div class="card">
+              <div class="label">Net P/L</div>
+              <div class="value positive">30.0%</div>
+              <div class="subvalue">Replay summary</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" style="border-top: 1px solid var(--line);">
+          <div class="section-title">
+            <h2>Indicator Bots</h2>
+            <span class="small">Configurable runtime deployments</span>
+          </div>
+
+          <div class="bot-list">
+            <div class="bot-row">
+              <div>
+                <div class="bot-name">AD1 / Binance_Dem</div>
+                <div class="bot-meta">FARTCOINUSDT.P • 5m • webhook route active</div>
+              </div>
+              <div class="pill">Running</div>
+              <div class="metric-block">
+                <strong class="positive">84.44%</strong>
+                <span>win rate</span>
+              </div>
+              <div class="metric-block">
+                <strong class="positive">30.0%</strong>
+                <span>net P/L</span>
+              </div>
+              <div class="toggle" aria-hidden="true"></div>
+            </div>
+
+            <div class="bot-row">
+              <div>
+                <div class="bot-name">AD1 / Test Grid B</div>
+                <div class="bot-meta">BTCUSDT • 15m • parameter comparison lane</div>
+              </div>
+              <div class="pill" style="background: rgba(248, 184, 78, 0.12); color: var(--amber); border-color: rgba(248, 184, 78, 0.2);">Replay</div>
+              <div class="metric-block">
+                <strong>61.20%</strong>
+                <span>win rate</span>
+              </div>
+              <div class="metric-block">
+                <strong class="negative">-2.4%</strong>
+                <span>net P/L</span>
+              </div>
+              <div class="toggle" aria-hidden="true" style="background: rgba(85, 102, 119, 0.35);"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="section">
+          <div class="section-title">
+            <h3>Backtest Workbench</h3>
+            <span class="small">AD1 tuning</span>
+          </div>
+
+          <div class="form-card">
+            <div class="small">Selected indicator</div>
+            <div style="font-size: 22px; font-weight: 700; margin-top: 6px;">AD1</div>
+            <div class="fields">
+              <div class="field">
+                <label>Take Profit %</label>
+                <div class="input">1.5</div>
+              </div>
+              <div class="field">
+                <label>Stop Loss %</label>
+                <div class="input">6.0</div>
+              </div>
+              <div class="field">
+                <label>Threshold</label>
+                <div class="input">90</div>
+              </div>
+              <div class="field">
+                <label>Webhook Key</label>
+                <div class="input">Binance_Dem</div>
+              </div>
+            </div>
+            <button class="cta">Run Replay Backtest</button>
+          </div>
+
+          <div class="summary-card" style="margin-top: 14px;">
+            <div class="summary-head">
+              <strong>Latest Summary</strong>
+              <span class="small">sample replay</span>
+            </div>
+            <div class="mini-grid">
+              <div class="mini">
+                <div class="small">Trades</div>
+                <strong>90</strong>
+              </div>
+              <div class="mini">
+                <div class="small">Max DD</div>
+                <strong class="negative">23.55%</strong>
+              </div>
+              <div class="mini">
+                <div class="small">Ending Equity</div>
+                <strong>130.0</strong>
+              </div>
+              <div class="mini">
+                <div class="small">Position</div>
+                <strong>Flat</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-title" style="margin-top: 18px; margin-bottom: 12px;">
+            <h3>Recent Signals</h3>
+            <span class="small">raw TradeRelay payloads</span>
+          </div>
+          <div class="log-list">
+            <div class="log-row">
+              <div class="log-head">
+                <strong>ENTER_LONG</strong>
+                <span class="small">2026-04-12 12:45 UTC</span>
+              </div>
+              <div class="code">ENTER-LONG_Binance_Dem</div>
+            </div>
+            <div class="log-row">
+              <div class="log-head">
+                <strong>EXIT_ALL</strong>
+                <span class="small">2026-04-12 12:50 UTC</span>
+              </div>
+              <div class="code">EXIT-ALL_Binance_Dem</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>

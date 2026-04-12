@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Signal Engine Control</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.7/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body class="is-compact">
+  <div class="app-shell">
+    <header class="topnav">
+      <div class="brand-block">
+        <div class="brand-mark">S</div>
+        <span class="brand-name">Signal Engine</span>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item is-active" data-view="chart"><span class="nav-text">Chart</span></button>
+        <button class="nav-item" data-view="settings"><span class="nav-text">Settings</span></button>
+      </nav>
+
+      <div class="topnav-status">
+        <span class="status-dot ok" title="TradeRelay route healthy"></span>
+        <span class="status-dot ok" title="AD1 replay ready"></span>
+        <span class="status-dot warn" title="Python runtime missing"></span>
+      </div>
+    </header>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div>
+          <div class="section-kicker">Signal Engine</div>
+          <h2 id="view-title">Chart</h2>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button" id="run-backtest-button" type="button">Run Replay</button>
+        </div>
+      </header>
+
+      <section class="view" id="view-settings">
+        <div class="settings-bots-section">
+          <div class="settings-section-head">
+            <div class="section-kicker">Deployments</div>
+            <h3>Indicator Bots</h3>
+          </div>
+          <div class="bot-list" id="bot-list"></div>
+        </div>
+
+        <div class="content-grid two-column">
+          <section class="panel-card">
+            <div class="panel-header">
+              <div>
+                <div class="section-kicker">Editable Runtime Fields</div>
+                <h3>Current Config</h3>
+              </div>
+            </div>
+            <form class="config-form" id="config-form"></form>
+            <div class="settings-save-row">
+              <button class="ghost-button tr-send-btn" id="settings-save-btn" type="button">Save Settings</button>
+              <span class="settings-save-feedback" id="settings-save-feedback"></span>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="panel-header">
+              <div>
+                <div class="section-kicker">Serialized Output</div>
+                <h3>Config Preview</h3>
+              </div>
+            </div>
+            <pre class="code-preview" id="config-preview"></pre>
+          </section>
+        </div>
+
+        <section class="panel-card tr-test-panel">
+          <div class="panel-header">
+            <div>
+              <div class="section-kicker">TradeRelay</div>
+              <h3>Send Test Signal</h3>
+            </div>
+            <div id="tr-connection-badge" class="tr-badge tr-badge-idle">Not configured</div>
+          </div>
+          <div class="tr-url-row">
+            <span class="mini-label">Webhook URL</span>
+            <span id="tr-url-display" class="tr-url-display">— paste URL in bot config above —</span>
+          </div>
+          <div class="tr-controls">
+            <label class="param-field" for="tr-action">
+              <span>Action</span>
+              <select id="tr-action">
+                <option>ENTER-LONG</option>
+                <option>ENTER-SHORT</option>
+                <option>EXIT-ALL</option>
+                <option>EXIT-LONG</option>
+                <option>EXIT-SHORT</option>
+              </select>
+            </label>
+            <div class="tr-message-wrap">
+              <span class="mini-label">Message</span>
+              <code id="tr-message-preview" class="tr-message-preview">—</code>
+            </div>
+            <button class="ghost-button replay-btn tr-send-btn" id="tr-send-btn" type="button" disabled>Send Test Signal</button>
+          </div>
+          <div id="tr-response" class="tr-response"></div>
+        </section>
+
+        <section class="panel-card settings-signal-log">
+          <div class="panel-header">
+            <div>
+              <div class="section-kicker">Webhook History</div>
+              <h3>Signal Log</h3>
+            </div>
+          </div>
+          <div class="log-table" id="signal-table"></div>
+        </section>
+      </section>
+
+      <section class="view is-visible" id="view-chart">
+        <div class="chart-controls-bar">
+          <div class="chart-bot-tabs" id="chart-bot-tabs"></div>
+          <div class="chart-mode-controls">
+            <label for="chart-mode-select">Mode</label>
+            <select id="chart-mode-select" class="chart-mode-select">
+              <option value="replay">Replay</option>
+              <option value="history">History</option>
+              <option value="live" selected>Live</option>
+            </select>
+            <label for="chart-history-bars">Bars</label>
+            <select id="chart-history-bars" class="chart-mode-select">
+              <option value="500">500</option>
+              <option value="1000">1,000</option>
+              <option value="1500">1,500</option>
+              <option value="2500">2,500</option>
+              <option value="4000" selected>4,000</option>
+              <option value="6000">6,000</option>
+              <option value="8000">8,000</option>
+              <option value="12000">12,000</option>
+            </select>
+            <span class="chart-mode-status" id="chart-mode-status">Replay mode</span>
+          </div>
+          <div class="chart-symbol-info" id="chart-symbol-info"></div>
+          <div class="chart-perf-strip" id="chart-perf-strip"></div>
+        </div>
+        <div class="replay-controls" id="replay-controls">
+          <div class="replay-button-stack">
+            <button class="ghost-button replay-btn" id="replay-step-back" type="button">Back</button>
+            <button class="ghost-button replay-btn" id="replay-play" type="button">Play</button>
+            <button class="ghost-button replay-btn" id="replay-step-forward" type="button">Next</button>
+          </div>
+          <div class="replay-slider-wrap">
+            <input id="replay-scrubber" class="replay-scrubber" type="range" min="0" max="119" step="1" value="0">
+          </div>
+          <div class="replay-meta">
+            <label for="replay-speed">Speed</label>
+            <select id="replay-speed" class="replay-speed">
+              <option value="1">1x</option>
+              <option value="2" selected>2x</option>
+              <option value="4">4x</option>
+              <option value="8">8x</option>
+            </select>
+            <span id="replay-progress" class="replay-progress">Bar 1 / 120</span>
+          </div>
+        </div>
+        <div class="chart-tools-row">
+          <div class="replay-layer-toggles" id="replay-layer-toggles">
+            <label><input id="toggle-candles" type="checkbox" checked> Candles</label>
+            <label><input id="toggle-sma" type="checkbox" checked> SMA</label>
+            <label><input id="toggle-volume" type="checkbox" checked> Volume</label>
+            <label><input id="toggle-markers" type="checkbox" checked> Entries/Exits</label>
+            <label><input id="toggle-levels" type="checkbox" checked> TP/SL Lines</label>
+          </div>
+          <div class="replay-import-tools">
+            <input id="replay-jsonl-input" class="replay-jsonl-input" type="file" accept=".jsonl,.txt,.json">
+            <button class="ghost-button replay-btn" id="replay-load-jsonl" type="button">Load JSONL</button>
+            <span id="replay-data-source" class="replay-data-source">Source: Sample data</span>
+          </div>
+        </div>
+        <div class="chart-nav-tools" id="chart-nav-tools">
+          <button class="ghost-button replay-btn" id="chart-pan-left" type="button">Pan Left</button>
+          <button class="ghost-button replay-btn" id="chart-pan-right" type="button">Pan Right</button>
+          <button class="ghost-button replay-btn" id="chart-zoom-in" type="button">Zoom In</button>
+          <button class="ghost-button replay-btn" id="chart-zoom-out" type="button">Zoom Out</button>
+          <button class="ghost-button replay-btn" id="chart-follow-toggle" type="button">Follow Price: Off</button>
+          <button class="ghost-button replay-btn" id="chart-reset-view" type="button">Reset View</button>
+          <button class="ghost-button replay-btn" id="chart-load-more" type="button">Load More History</button>
+          <button class="ghost-button replay-btn" id="chart-autosignal-toggle" type="button">Auto-Signal: Off</button>
+          <span class="chart-nav-hint">Tip: Hold Shift + Mouse Wheel for horizontal scroll</span>
+        </div>
+        <div class="chart-parameter-lab" id="chart-parameter-lab">
+          <div class="param-fields">
+            <label class="param-field" for="chart-param-symbol">
+              <span>Coin / Symbol</span>
+              <input id="chart-param-symbol" type="text" placeholder="BTCUSDT">
+            </label>
+            <label class="param-field" for="chart-param-timeframe">
+              <span>Timeframe</span>
+              <select id="chart-param-timeframe">
+                <option value="1m">1m</option>
+                <option value="3m">3m</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="30m">30m</option>
+                <option value="1h">1h</option>
+                <option value="4h">4h</option>
+                <option value="1d">1d</option>
+                <option value="1w">1w</option>
+              </select>
+            </label>
+            <label class="param-field" for="chart-param-tp">
+              <span>TP %</span>
+              <input id="chart-param-tp" type="number" step="0.1" min="0.1" max="25">
+            </label>
+            <label class="param-field" for="chart-param-sl">
+              <span>SL %</span>
+              <input id="chart-param-sl" type="number" step="0.1" min="0.1" max="40">
+            </label>
+            <label class="param-field" for="chart-param-threshold">
+              <span>Threshold</span>
+              <input id="chart-param-threshold" type="number" step="1" min="1" max="99">
+            </label>
+          </div>
+          <div class="param-actions">
+            <button class="ghost-button replay-btn" id="chart-apply-params" type="button">Apply Parameters</button>
+            <button class="ghost-button replay-btn" id="chart-optimize-params" type="button">AI Optimize</button>
+          </div>
+          <div class="param-feedback" id="chart-param-feedback">Adjust values and apply to re-run replay performance.</div>
+          <div class="optimizer-results" id="optimizer-results"></div>
+        </div>
+        <div class="chart-wrapper">
+          <div class="chart-binance-topbar">
+            <div class="chart-time-pills" id="chart-time-pills">
+              <button class="time-pill" data-tf="1m" type="button">1m</button>
+              <button class="time-pill" data-tf="5m" type="button">5m</button>
+              <button class="time-pill" data-tf="15m" type="button">15m</button>
+              <button class="time-pill" data-tf="1h" type="button">1H</button>
+              <button class="time-pill" data-tf="4h" type="button">4H</button>
+              <button class="time-pill" data-tf="1d" type="button">1D</button>
+              <button class="time-pill" data-tf="1w" type="button">1W</button>
+            </div>
+            <div class="chart-top-metrics" id="chart-top-metrics"></div>
+          </div>
+          <div class="chart-main-shell">
+            <aside class="chart-left-tools" aria-hidden="true">
+              <span>+</span>
+              <span>o</span>
+              <span>/</span>
+              <span>-</span>
+              <span>[]</span>
+              <span>T</span>
+              <span>m</span>
+            </aside>
+            <div class="chart-core-area">
+              <div class="chart-ohlcv-legend" id="chart-ohlcv-legend"></div>
+              <div class="chart-cursor-time" id="chart-cursor-time"></div>
+              <div class="chart-watermark">BINANCE</div>
+              <div id="tv-chart"></div>
+            </div>
+          </div>
+        </div>
+        <section class="chart-collapsible is-collapsed" id="trade-log-panel">
+          <div class="chart-collapsible-head">
+            <div>
+              <div class="section-kicker">Replay Trades</div>
+              <h3>Trade Cards</h3>
+            </div>
+            <button class="ghost-button replay-btn" id="toggle-trade-log" type="button" aria-expanded="false">Expand</button>
+          </div>
+          <div class="chart-trade-log" id="chart-trade-log"></div>
+        </section>
+        <div class="chart-replay-analytics">
+          <section class="panel-card">
+            <div class="panel-header compact-header">
+              <div>
+                <div class="section-kicker">Replay Equity</div>
+                <h3>Live Equity Curve</h3>
+              </div>
+            </div>
+            <div class="live-equity-wrap">
+              <div class="live-equity-svg-wrap">
+                <svg id="live-equity-svg" viewBox="0 0 620 180" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="live-equity-stats" id="live-equity-stats"></div>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="panel-header compact-header">
+              <div>
+                <div class="section-kicker">Replay Events</div>
+                <h3>Signal Feed</h3>
+              </div>
+            </div>
+            <div class="strategy-stats-board" id="strategy-stats-board"></div>
+            <div class="replay-signal-feed" id="replay-signal-feed"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
