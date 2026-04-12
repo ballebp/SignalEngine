@@ -1743,9 +1743,59 @@ function fmtTradeTime(unixSec) {
   return `${dy}/${mo} ${hh}:${mm} UTC`;
 }
 
+let tradeLogView = 'cards'; // 'cards' | 'list'
+
+function setupTradeViewToggle() {
+  const cardsBtn = document.getElementById('trade-view-cards');
+  const listBtn  = document.getElementById('trade-view-list');
+  if (!cardsBtn || !listBtn) return;
+  const sync = () => {
+    cardsBtn.classList.toggle('is-active', tradeLogView === 'cards');
+    listBtn.classList.toggle('is-active',  tradeLogView === 'list');
+    const log = document.getElementById('chart-trade-log');
+    if (log) log.classList.toggle('is-list-view', tradeLogView === 'list');
+  };
+  cardsBtn.onclick = () => { tradeLogView = 'cards'; sync(); renderChartTradeLog(chartState.data?.tradeLog || [], getSelectedBotForChart()); };
+  listBtn.onclick  = () => { tradeLogView = 'list';  sync(); renderChartTradeLog(chartState.data?.tradeLog || [], getSelectedBotForChart()); };
+  sync();
+}
+
 function renderChartTradeLog(tradeLog, bot) {
   const currentTime = chartState.data?.candles?.[chartState.replayIndex]?.time || null;
-  document.getElementById('chart-trade-log').innerHTML = tradeLog.map((trade) => {
+  const log = document.getElementById('chart-trade-log');
+  if (!log) return;
+  log.classList.toggle('is-list-view', tradeLogView === 'list');
+
+  // Newest first
+  const sorted = [...tradeLog].reverse();
+
+  if (tradeLogView === 'list') {
+    log.innerHTML = `
+      <div class="trade-list-header">
+        <span>Dir</span><span>Entry time</span><span>Exit time</span><span>Entry px</span><span>Exit px</span><span>Result</span><span>P/L</span>
+      </div>
+      ${sorted.map((trade) => {
+        const isOpen  = trade.reason === 'open';
+        const isWin   = trade.reason === 'tp';
+        const hasStarted = currentTime !== null && trade.entryTime <= currentTime;
+        const hasClosed  = trade.exitTime !== null && currentTime !== null && trade.exitTime <= currentTime;
+        const plStr  = trade.pl !== null ? (trade.pl > 0 ? '+' : '') + trade.pl.toFixed(2) + '%' : '—';
+        const plClass = trade.pl === null ? '' : trade.pl > 0 ? 'is-positive' : 'is-negative';
+        const result = !hasStarted ? 'Queued' : hasClosed ? (isWin ? 'Win TP' : 'Loss SL') : 'Open';
+        return `<div class="trade-list-row ${hasClosed ? '' : hasStarted ? 'is-active' : 'is-pending'}">
+          <span class="trade-dir-badge ${trade.dir}">${trade.dir.toUpperCase()}</span>
+          <span>${fmtTradeTime(trade.entryTime)}</span>
+          <span>${hasClosed ? fmtTradeTime(trade.exitTime) : '—'}</span>
+          <span class="mono">${trade.entry.toFixed(5)}</span>
+          <span class="mono">${hasClosed ? trade.exit.toFixed(5) : isOpen ? trade.tp.toFixed(5) : '—'}</span>
+          <span>${result}</span>
+          <span class="${plClass}">${plStr}</span>
+        </div>`;
+      }).join('')}`;
+    return;
+  }
+
+  log.innerHTML = sorted.map((trade) => {
     const isOpen = trade.reason === 'open';
     const isWin  = trade.reason === 'tp';
     const hasStarted = currentTime !== null && trade.entryTime <= currentTime;
@@ -2484,6 +2534,7 @@ loadSavedSettings().then(() => {
   renderSignalTable();
   updateStatusDots();
   setupTradeLogCollapse();
+  setupTradeViewToggle();
   setupTradeRelayTestPanel();
   setupSaveButton();
   const refreshBtn = document.getElementById('signal-log-refresh-btn');

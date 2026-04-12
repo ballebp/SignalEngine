@@ -271,7 +271,11 @@
               <div class="section-kicker">Replay Trades</div>
               <h3>Trade Cards</h3>
             </div>
-            <button class="ghost-button replay-btn" id="toggle-trade-log" type="button" aria-expanded="false">Expand</button>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <button class="ghost-button replay-btn is-active" id="trade-view-cards" type="button" title="Card view">⊞ Cards</button>
+              <button class="ghost-button replay-btn" id="trade-view-list" type="button" title="List view">☰ List</button>
+              <button class="ghost-button replay-btn" id="toggle-trade-log" type="button" aria-expanded="false">Expand</button>
+            </div>
           </div>
           <div class="chart-trade-log" id="chart-trade-log"></div>
         </section>

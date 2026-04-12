@@ -1265,6 +1265,52 @@ body.is-compact .panel-header h3 {
   gap: 12px;
 }
 
+.chart-trade-log.is-list-view {
+  display: block;
+}
+
+.trade-list-header,
+.trade-list-row {
+  display: grid;
+  grid-template-columns: 70px 130px 130px 1fr 1fr 90px 80px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.trade-list-header {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.trade-list-row {
+  border-radius: 10px;
+  transition: background 0.15s;
+}
+
+.trade-list-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.trade-list-row.is-active {
+  background: rgba(39, 211, 197, 0.06);
+}
+
+.trade-list-row.is-pending {
+  opacity: 0.45;
+}
+
+.mono {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+}
+
+
 .chart-collapsible {
   border: 1px solid var(--line);
   border-radius: 18px;
