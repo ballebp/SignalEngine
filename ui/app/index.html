@@ -124,33 +124,37 @@
 
       <section class="view is-visible" id="view-chart">
         <div class="chart-controls-bar">
-          <div class="chart-bot-tabs" id="chart-bot-tabs"></div>
-          <div class="chart-mode-controls">
-            <label for="chart-mode-select">Mode</label>
-            <select id="chart-mode-select" class="chart-mode-select">
-              <option value="history">History</option>
-              <option value="live" selected>Live</option>
-            </select>
-            <label for="chart-history-bars">Bars</label>
-            <select id="chart-history-bars" class="chart-mode-select">
-              <option value="500">500</option>
-              <option value="1000">1,000</option>
-              <option value="1500">1,500</option>
-              <option value="2500">2,500</option>
-              <option value="4000" selected>4,000</option>
-              <option value="6000">6,000</option>
-              <option value="8000">8,000</option>
-              <option value="12000">12,000</option>
-            </select>
-            <span class="chart-mode-status" id="chart-mode-status">Replay mode</span>
+          <div class="chart-controls-row">
+            <div class="chart-bot-tabs" id="chart-bot-tabs"></div>
+            <div class="chart-mode-controls">
+              <label for="chart-mode-select">Mode</label>
+              <select id="chart-mode-select" class="chart-mode-select">
+                <option value="history">History</option>
+                <option value="live" selected>Live</option>
+              </select>
+              <label for="chart-history-bars">Bars</label>
+              <select id="chart-history-bars" class="chart-mode-select">
+                <option value="500">500</option>
+                <option value="1000">1,000</option>
+                <option value="1500">1,500</option>
+                <option value="2500">2,500</option>
+                <option value="4000" selected>4,000</option>
+                <option value="6000">6,000</option>
+                <option value="8000">8,000</option>
+                <option value="12000">12,000</option>
+              </select>
+              <span class="chart-mode-status" id="chart-mode-status">Live mode</span>
+            </div>
           </div>
-          <div class="chart-symbol-info" id="chart-symbol-info"></div>
-          <div class="chart-perf-strip" id="chart-perf-strip"></div>
-          <button class="autosignal-play-btn" id="chart-autosignal-toggle" type="button" title="Activate auto-signal">
-            <svg class="autosignal-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,3 20,12 6,21"/></svg>
-            <span class="autosignal-label">Auto-Signal</span>
-            <span class="autosignal-state">OFF</span>
-          </button>
+          <div class="chart-controls-row">
+            <div class="chart-symbol-info" id="chart-symbol-info"></div>
+            <div class="chart-perf-strip" id="chart-perf-strip"></div>
+            <button class="autosignal-play-btn" id="chart-autosignal-toggle" type="button" title="Activate auto-signal">
+              <svg class="autosignal-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,3 20,12 6,21"/></svg>
+              <span class="autosignal-label">Auto-Signal</span>
+              <span class="autosignal-state">OFF</span>
+            </button>
+          </div>
         </div>
         <div class="replay-controls" id="replay-controls">
           <div class="replay-button-stack">

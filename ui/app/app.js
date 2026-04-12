@@ -452,10 +452,12 @@ function renderConfigForm() {
       ['tpType', 'TP Type (dynamic / fixed)', bot.tpType || 'dynamic'],
       ['slippage', 'Slippage %', bot.slippage ?? 0.05],
     ] : []),
-    ['source1', 'Source 1', bot.source1],
-    ['source2', 'Source 2', bot.source2],
-    ['source3', 'Source 3', bot.source3],
-    ['source4', 'Source 4', bot.source4],
+    ...(!isH9S ? [
+      ['source1', 'Source 1', bot.source1],
+      ['source2', 'Source 2', bot.source2],
+      ['source3', 'Source 3', bot.source3],
+      ['source4', 'Source 4', bot.source4],
+    ] : []),
   ];
 
   const TF_OPTIONS = ['1m','3m','5m','15m','30m','1h','4h','1d','1w'];
@@ -507,17 +509,36 @@ function renderConfigForm() {
 
 function renderConfigPreview() {
   const bot = getSelectedBot();
-  const normalized = {
-    indicatorId: 'AD1',
-    botId: bot.id,
-    symbol: bot.symbol,
-    timeframe: bot.timeframe,
-    webhookKey: bot.webhookKey,
-    tradeRelayUrl: bot.tradeRelayUrl || '',
-    takeProfitPercent: Number(bot.tp),
-    stopLossPercent: Number(bot.sl),
-    unusualPercentileThreshold: Number(bot.threshold),
-    sourceSymbols: [bot.source1, bot.source2, bot.source3, bot.source4],
+  let normalized;
+  if (bot.strategy === 'h9s') {
+    normalized = {
+      indicatorId: 'H9S',
+      botId: bot.id,
+      symbol: bot.symbol,
+      timeframe: bot.timeframe,
+      webhookKey: bot.webhookKey,
+      tradeRelayUrl: bot.tradeRelayUrl || '',
+      takeProfitPercent: Number(bot.tp),
+      stopLossPercent: Number(bot.sl),
+      swingSize: Number(bot.threshold),
+      bosConfType: bot.bosConfType || 'close',
+      tpType: bot.tpType || 'dynamic',
+      slippage: Number(bot.slippage ?? 0.05),
+    };
+  } else {
+    normalized = {
+      indicatorId: 'AD1',
+      botId: bot.id,
+      symbol: bot.symbol,
+      timeframe: bot.timeframe,
+      webhookKey: bot.webhookKey,
+      tradeRelayUrl: bot.tradeRelayUrl || '',
+      takeProfitPercent: Number(bot.tp),
+      stopLossPercent: Number(bot.sl),
+      unusualPercentileThreshold: Number(bot.threshold),
+      sourceSymbols: [bot.source1, bot.source2, bot.source3, bot.source4],
+    };
+  }
   };
 
   configPreview.textContent = JSON.stringify(normalized, null, 2);
