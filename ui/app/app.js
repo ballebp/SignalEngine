@@ -1492,6 +1492,13 @@ async function initChart(botId) {
   stopLive();
   chartState.barSpacing = 7;
   const bot  = state.bots.find((b) => b.id === botId) || state.bots[0];
+  // Restore persisted autoSignal state into chartState on every chart init
+  if (bot.autoSignal && chartState.autoSignalByBot[bot.id] === undefined) {
+    chartState.autoSignalByBot[bot.id] = true;
+    if (!chartState.lastFiredByBot[bot.id]) {
+      chartState.lastFiredByBot[bot.id] = Math.floor(Date.now() / 1000);
+    }
+  }
   const imported = chartState.importedCandlesByBot[bot.id];
   let sourcePayload = imported || generateChartBars(bot, chartState.mode === 'replay' ? 120 : Math.max(2000, getDesiredHistoryBars()));
   chartState.sourceLabel = chartState.importedSourceByBot[bot.id] || 'Sample data';
@@ -1869,10 +1876,12 @@ function setupChartNavigationTools(bot) {
       }
       const current = !!chartState.autoSignalByBot[bot.id];
       chartState.autoSignalByBot[bot.id] = !current;
+      bot.autoSignal = !current;
       if (!current) {
         // Arm: set lastFired to now so we never re-fire old history
         chartState.lastFiredByBot[bot.id] = Math.floor(Date.now() / 1000);
       }
+      void saveSettings();
       syncAutoSignalBtn(bot);
     };
   }
@@ -2678,6 +2687,7 @@ function botToRow(bot) {
       tp: bot.tp, sl: bot.sl, threshold: bot.threshold,
       source1: bot.source1, source2: bot.source2,
       source3: bot.source3, source4: bot.source4,
+      autoSignal: !!bot.autoSignal,
     },
   };
 }
@@ -2687,7 +2697,7 @@ function applyBotRow(row) {
   if (!bot || !row.config) return;
   const editable = ['name', 'symbol', 'timeframe', 'webhookKey', 'tradeRelayUrl',
     'tradeRelayWebhookCode', 'tp', 'sl', 'threshold',
-    'source1', 'source2', 'source3', 'source4'];
+    'source1', 'source2', 'source3', 'source4', 'autoSignal'];
   editable.forEach((key) => { if (row.config[key] !== undefined) bot[key] = row.config[key]; });
 }
 
