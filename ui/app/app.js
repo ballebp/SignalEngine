@@ -51,6 +51,8 @@ const state = {
       timeframe: '15m',
       strategy: 'h9s',
       tpType: 'dynamic',
+      bosConfType: 'close',
+      slippage: 0.05,
       webhookKey: 'H9S_BTC',
       tradeRelayUrl: '',
       tradeRelayWebhookCode: '',
@@ -434,6 +436,7 @@ async function renderSignalTable() {
 
 function renderConfigForm() {
   const bot = getSelectedBot();
+  const isH9S = bot.strategy === 'h9s';
   const fields = [
     ['name', 'Bot Name', bot.name],
     ['symbol', 'Symbol', bot.symbol],
@@ -443,7 +446,12 @@ function renderConfigForm() {
     ['tradeRelayWebhookCode', 'TradeRelay Webhook Code (step 1 from bot settings)', bot.tradeRelayWebhookCode || ''],
     ['tp', 'Take Profit %', bot.tp],
     ['sl', 'Stop Loss %', bot.sl],
-    ['threshold', 'Threshold', bot.threshold],
+    ['threshold', isH9S ? 'Swing Size' : 'Threshold', bot.threshold],
+    ...(isH9S ? [
+      ['bosConfType', 'Confirm (Wicks / Close)', bot.bosConfType || 'close'],
+      ['tpType', 'TP Type (dynamic / fixed)', bot.tpType || 'dynamic'],
+      ['slippage', 'Slippage %', bot.slippage ?? 0.05],
+    ] : []),
     ['source1', 'Source 1', bot.source1],
     ['source2', 'Source 2', bot.source2],
     ['source3', 'Source 3', bot.source3],
@@ -468,7 +476,7 @@ function renderConfigForm() {
   configForm.querySelectorAll('input, select').forEach((el) => {
     el.addEventListener('change', () => {
       const currentBot = getSelectedBot();
-      const parsedValue = ['tp', 'sl', 'threshold'].includes(el.name) ? Number(el.value || 0) : el.value;
+      const parsedValue = ['tp', 'sl', 'threshold', 'slippage'].includes(el.name) ? Number(el.value || 0) : el.value;
       currentBot[el.name] = parsedValue;
       renderConfigPreview();
       renderHero();
@@ -486,7 +494,7 @@ function renderConfigForm() {
     if (el.tagName !== 'SELECT') {
       el.addEventListener('input', () => {
         const currentBot = getSelectedBot();
-        const parsedValue = ['tp', 'sl', 'threshold'].includes(el.name) ? Number(el.value || 0) : el.value;
+        const parsedValue = ['tp', 'sl', 'threshold', 'slippage'].includes(el.name) ? Number(el.value || 0) : el.value;
         currentBot[el.name] = parsedValue;
         renderConfigPreview();
         renderHero();
@@ -1080,6 +1088,8 @@ function runH9SStrategy(candles, bot) {
   const slPct = Number(bot.sl) / 100;
   const swingSize = Math.max(2, Math.round(Number(bot.threshold) || 25));
   const useDynamic = (bot.tpType || 'dynamic') === 'dynamic';
+  const useWicks = (bot.bosConfType || 'close') === 'wicks';
+  const slipMult = Number(bot.slippage || 0) / 100;
 
   function atrAt(i) {
     const period = 30;
@@ -1118,8 +1128,8 @@ function runH9SStrategy(candles, bot) {
 
     // While in trade: consume (deactivate) pivots when candidate BOS occurs
     if (inTrade) {
-      if (!isNaN(prevHigh) && bar.close > prevHigh && highAct) highAct = false;
-      if (!isNaN(prevLow)  && bar.close < prevLow  && lowAct)  lowAct  = false;
+      if (!isNaN(prevHigh) && highAct && (useWicks ? bar.high > prevHigh : bar.close > prevHigh)) highAct = false;
+      if (!isNaN(prevLow)  && lowAct  && (useWicks ? bar.low  < prevLow  : bar.close < prevLow))  lowAct  = false;
     }
 
     // EXIT: TP/SL
@@ -1156,19 +1166,25 @@ function runH9SStrategy(candles, bot) {
       }
     }
 
-    // ENTRY: BOS candle-close confirmation
+    // ENTRY: BOS confirmation (wicks or candle close)
     const canEnter = !inTrade && lastEntryBar !== i && lastExitBar !== i;
     if (canEnter && !isNaN(prevHigh) && !isNaN(prevLow)) {
       let bullSig = false, bearSig = false;
-      if (bar.close > prevHigh && highAct)     { bullSig = true; highAct = false; }
-      else if (bar.close < prevLow && lowAct)  { bearSig = true; lowAct  = false; }
+      if (useWicks) {
+        if (bar.high > prevHigh && highAct)    { bullSig = true; highAct = false; }
+        else if (bar.low < prevLow && lowAct)  { bearSig = true; lowAct  = false; }
+      } else {
+        if (bar.close > prevHigh && highAct)     { bullSig = true; highAct = false; }
+        else if (bar.close < prevLow && lowAct)  { bearSig = true; lowAct  = false; }
+      }
 
       if (bullSig || bearSig) {
         lastEntryBar = i;
         inTrade = true;
         isBull = bullSig;
         entryBar = i;
-        entryPx = bar.close;
+        const rawPx = useWicks ? (bullSig ? bar.high : bar.low) : bar.close;
+        entryPx = bullSig ? rawPx * (1 + slipMult) : rawPx * (1 - slipMult);
         const atr = atrAt(i);
         const dist  = useDynamic ? atr * 1.5 : entryPx * tpPct;
         const sdist = useDynamic ? atr * 1.5 : entryPx * slPct;
