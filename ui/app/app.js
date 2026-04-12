@@ -2260,6 +2260,7 @@ function setupChartParameterLab(bot) {
 
     feedback.className = 'param-feedback good';
     feedback.textContent = `Applied ${bot.symbol} ${bot.timeframe}, TP ${bot.tp}%, SL ${bot.sl}%, threshold ${bot.threshold}. Replay + performance updated.`;
+    void saveSettings();
     renderHero();
     renderBots();
     renderConfigForm();
