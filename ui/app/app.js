@@ -276,10 +276,12 @@ function renderDashboardSignals() {
 function renderBots() {
   botList.innerHTML = state.bots
     .map(
-      (bot) => `
+      (bot) => {
+        const isLiveActive = chartState.mode === 'live' && !!chartState.autoSignalByBot[bot.id];
+        return `
         <article class="bot-item ${bot.id === state.selectedBotId ? 'is-selected' : ''}" data-bot-id="${bot.id}">
           <div>
-            <div class="bot-title">${bot.name}</div>
+            <div class="bot-title">${bot.name}${isLiveActive ? ' <span class="bot-live-badge">● LIVE</span>' : ''}</div>
             <div class="bot-subtitle">${bot.symbol} • ${bot.timeframe} • ${bot.webhookKey}</div>
           </div>
           <div class="bot-metric">
@@ -296,7 +298,8 @@ function renderBots() {
           </div>
           <div class="toggle-pill" aria-hidden="true"></div>
         </article>
-      `
+      `;
+      }
     )
     .join('');
 
@@ -1715,6 +1718,19 @@ function syncAutoSignalBtn(bot) {
   toggle.classList.toggle('is-live', active);
   toggle.disabled = !isLive;
   toggle.title = !isLive ? 'Switch to Live mode to use Auto-Signal' : hasUrl ? '' : 'Configure TradeRelay URL in Settings first';
+  // Update topnav dots to reflect real bot status
+  updateStatusDots();
+  // Refresh bot list so live badge appears/disappears
+  renderBots();
+}
+
+function updateStatusDots() {
+  const dots = document.querySelectorAll('.topnav-status .status-dot');
+  const anyLive = chartState.mode === 'live' && state.bots.some((b) => chartState.autoSignalByBot[b.id]);
+  const hasRelay = state.bots.some((b) => b.tradeRelayUrl);
+  if (dots[0]) { dots[0].className = `status-dot ${anyLive ? 'ok' : hasRelay ? 'warn' : 'off'}`; dots[0].title = anyLive ? 'Auto-Signal active' : hasRelay ? 'TradeRelay configured, signals paused' : 'TradeRelay not configured'; }
+  if (dots[1]) { dots[1].className = `status-dot ${chartState.mode === 'live' ? 'ok' : 'warn'}`; dots[1].title = chartState.mode === 'live' ? 'Live feed active' : `Mode: ${chartState.mode}`; }
+  if (dots[2]) { dots[2].className = `status-dot ${state.bots.length > 0 ? 'ok' : 'warn'}`; dots[2].title = `${state.bots.length} bot(s) configured`; }
 }
 
 function fmtTradeTime(unixSec) {
@@ -2466,6 +2482,7 @@ function setupSaveButton() {
 loadSavedSettings().then(() => {
   renderAll();
   renderSignalTable();
+  updateStatusDots();
   setupTradeLogCollapse();
   setupTradeRelayTestPanel();
   setupSaveButton();
