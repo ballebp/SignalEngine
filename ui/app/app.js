@@ -2029,22 +2029,23 @@ function setupReplayControls() {
       // Bars per day by timeframe
       const barsPerDayMap = { '1m':1440,'3m':480,'5m':288,'15m':96,'30m':48,'1h':24,'4h':6,'1d':1,'1w':1 };
       const bpd = barsPerDayMap[String(bot.timeframe).toLowerCase()] ?? 96;
-      const WINDOW = Math.max(200, bpd * 30);        // ~30 days of bars
-      const FETCH  = Math.min(WINDOW * 4, 10000);    // fetch 4× window so there's sampling range
-      // Fetch & cache full history once per bot
-      if (!chartState.fullHistoryByBot[bot.id]) {
-        try {
-          const market = await fetchBinanceKlines(bot, FETCH, chartState.marketType);
-          chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
-        } catch {
-          chartState.fullHistoryByBot[bot.id] = {
-            candles: chartState.data?.candles || [],
-            volumes: chartState.data?.volumes || [],
-          };
-        }
+      const IDEAL_WINDOW = Math.max(200, bpd * 30); // ~30 days of bars
+      const FETCH = Math.min(IDEAL_WINDOW * 6, 10000); // fetch 6× for wide sampling range
+      // Always re-fetch to guarantee different period each press
+      delete chartState.fullHistoryByBot[bot.id];
+      try {
+        const market = await fetchBinanceKlines(bot, FETCH, chartState.marketType);
+        chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
+      } catch {
+        chartState.fullHistoryByBot[bot.id] = {
+          candles: chartState.data?.candles || [],
+          volumes: chartState.data?.volumes || [],
+        };
       }
       const full = chartState.fullHistoryByBot[bot.id];
       const total = full.candles.length;
+      // Cap window to at most 40% of total so there's always a random range
+      const WINDOW = Math.min(IDEAL_WINDOW, Math.max(50, Math.floor(total * 0.4)));
       let slice, volSlice;
       if (total <= WINDOW) {
         slice = full.candles;
