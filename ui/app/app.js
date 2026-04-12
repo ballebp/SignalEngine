@@ -1714,8 +1714,9 @@ function syncAutoSignalBtn(bot) {
   const isLive = chartState.mode === 'live';
   const active = isLive && !!chartState.autoSignalByBot[bot?.id];
   const hasUrl = !!(bot?.tradeRelayUrl);
-  toggle.textContent = active ? 'Auto-Signal: ON' : 'Auto-Signal: Off';
-  toggle.classList.toggle('is-live', active);
+  const stateSpan = toggle.querySelector('.autosignal-state');
+  if (stateSpan) stateSpan.textContent = active ? 'ON' : 'OFF';
+  toggle.classList.toggle('is-active', active);
   toggle.disabled = !isLive;
   toggle.title = !isLive ? 'Switch to Live mode to use Auto-Signal' : hasUrl ? '' : 'Configure TradeRelay URL in Settings first';
   // Update topnav dots to reflect real bot status
