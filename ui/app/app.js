@@ -1717,6 +1717,16 @@ function syncAutoSignalBtn(bot) {
   toggle.title = !isLive ? 'Switch to Live mode to use Auto-Signal' : hasUrl ? '' : 'Configure TradeRelay URL in Settings first';
 }
 
+function fmtTradeTime(unixSec) {
+  if (!unixSec) return '—';
+  const d = new Date(unixSec * 1000);
+  const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dy = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${dy}/${mo} ${hh}:${mm} UTC`;
+}
+
 function renderChartTradeLog(tradeLog, bot) {
   const currentTime = chartState.data?.candles?.[chartState.replayIndex]?.time || null;
   document.getElementById('chart-trade-log').innerHTML = tradeLog.map((trade) => {
@@ -1730,11 +1740,16 @@ function renderChartTradeLog(tradeLog, bot) {
       : 'In progress';
     const plClass = trade.pl === null ? '' : trade.pl > 0 ? 'is-positive' : 'is-negative';
     const stateClass = hasStarted ? (isActive ? 'is-active' : '') : 'is-pending';
+    const exitLabel = hasClosed ? fmtTradeTime(trade.exitTime) : isActive ? 'Open' : '—';
     return `
       <article class="chart-trade-card ${stateClass}">
         <div class="chart-trade-header">
           <span class="trade-dir-badge ${trade.dir}">${trade.dir.toUpperCase()}</span>
           <span class="trade-result-badge ${isOpen ? 'open' : isWin ? 'win' : 'loss'}">${!hasStarted ? 'Queued' : hasClosed ? (isWin ? 'Win TP' : 'Loss SL') : 'Open'}</span>
+        </div>
+        <div class="trade-timestamps">
+          <div class="trade-ts-item"><span>Entry</span><strong>${fmtTradeTime(trade.entryTime)}</strong></div>
+          <div class="trade-ts-item"><span>Exit</span><strong>${exitLabel}</strong></div>
         </div>
         <div class="trade-price-grid">
           <div class="trade-price-item"><span>Entry</span><strong>${trade.entry.toFixed(5)}</strong></div>

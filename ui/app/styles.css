@@ -1528,6 +1528,30 @@ body.is-compact .panel-header h3 {
   border: 1px solid var(--line);
 }
 
+.trade-timestamps {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  margin-bottom: 2px;
+}
+
+.trade-ts-item span {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 3px;
+}
+
+.trade-ts-item strong {
+  font-size: 11px;
+  font-family: Consolas, "Courier New", monospace;
+  color: var(--text-secondary, #8ca0b3);
+}
+
 .trade-price-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
