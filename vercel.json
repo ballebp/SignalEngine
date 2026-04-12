@@ -1,4 +1,6 @@
 {
+  "buildCommand": null,
   "outputDirectory": "ui/app",
-  "cleanUrls": true
+  "installCommand": null,
+  "framework": null
 }
