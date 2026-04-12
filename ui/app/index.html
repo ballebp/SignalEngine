@@ -202,7 +202,18 @@
           <div class="param-fields">
             <label class="param-field" for="chart-param-symbol">
               <span>Coin / Symbol</span>
-              <input id="chart-param-symbol" type="text" placeholder="BTCUSDT">
+              <input id="chart-param-symbol" type="text" placeholder="BTCUSDT" list="symbol-suggestions" autocomplete="off">
+              <datalist id="symbol-suggestions">
+                <option value="BTCUSDT"><option value="ETHUSDT"><option value="SOLUSDT">
+                <option value="BNBUSDT"><option value="XRPUSDT"><option value="ADAUSDT">
+                <option value="DOGEUSDT"><option value="AVAXUSDT"><option value="LINKUSDT">
+                <option value="DOTUSDT"><option value="MATICUSDT"><option value="LTCUSDT">
+                <option value="ATOMUSDT"><option value="UNIUSDT"><option value="NEARUSDT">
+                <option value="APTUSDT"><option value="OPUSDT"><option value="ARBUSDT">
+                <option value="SUIUSDT"><option value="SEIUSDT"><option value="INJUSDT">
+                <option value="TIAUSDT"><option value="WIFUSDT"><option value="FETUSDT">
+                <option value="RENDERUSDT"><option value="JUPUSDT"><option value="TONUSDT">
+              </datalist>
             </label>
             <label class="param-field" for="chart-param-timeframe">
               <span>Timeframe</span>
