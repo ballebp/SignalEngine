@@ -810,7 +810,6 @@ function setReplayControlsVisible(visible) {
 }
 
 function getModeStatusText() {
-  if (chartState.mode === 'replay') return 'Replay mode';
   if (chartState.mode === 'history') return `History mode · ${chartState.sourceLabel}`;
   return `Live mode · ${chartState.sourceLabel}`;
 }
@@ -925,7 +924,7 @@ async function loadOlderHistory(bot, bars = 1000) {
 }
 
 function installAutoBackfill(bot) {
-  if (!chartState.chart || chartState.mode === 'replay') return;
+  if (!chartState.chart) return;
   const scale = chartState.chart.timeScale();
   scale.subscribeVisibleLogicalRangeChange((range) => {
     if (!range || chartState.isLoadingOlder) return;
@@ -936,7 +935,7 @@ function installAutoBackfill(bot) {
 }
 
 function getChartHeightForMode() {
-  return chartState.mode === 'replay' ? 500 : 640;
+  return 640;
 }
 
 function generateChartBars(bot, bars = 120) {
@@ -1501,7 +1500,7 @@ async function initChart(botId) {
     }
   }
   const imported = chartState.importedCandlesByBot[bot.id];
-  let sourcePayload = imported || generateChartBars(bot, chartState.mode === 'replay' ? 120 : Math.max(2000, getDesiredHistoryBars()));
+  let sourcePayload = imported || generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
   chartState.sourceLabel = chartState.importedSourceByBot[bot.id] || 'Sample data';
 
   if (chartState.mode === 'history' || chartState.mode === 'live') {
@@ -1569,8 +1568,7 @@ async function initChart(botId) {
     wickUpColor:    '#2ddb75',
     wickDownColor:  '#ff6d6d',
   });
-  const replayMode = chartState.mode === 'replay';
-  candleSeries.setData(replayMode ? data.candles.slice(0, 1) : data.candles);
+  candleSeries.setData(data.candles);
 
   // 20-bar SMA overlay
   const smaSeries = chart.addLineSeries({
@@ -1581,18 +1579,18 @@ async function initChart(botId) {
     priceLineVisible:        false,
   });
   const smaData = buildSma(data.candles, 20);
-  smaSeries.setData(replayMode ? [] : smaData);
+  smaSeries.setData(smaData);
 
   // Volume histogram in overlay pane
   const volSeries = chart.addHistogramSeries({
     priceFormat: { type: 'volume' },
     priceScaleId: 'vol',
   });
-  volSeries.setData(replayMode ? data.volumes.slice(0, 1) : data.volumes);
+  volSeries.setData(data.volumes);
   chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
   // Trade markers
-  candleSeries.setMarkers(replayMode ? [] : data.markers);
+  candleSeries.setMarkers(data.markers);
 
   // TP / SL / Entry lines for open trade
   if (data.openTrade) {
@@ -1672,7 +1670,6 @@ async function initChart(botId) {
   chartState.replaySignals = data.replaySignals;
   chartState.replayEquityTimeline = data.replayEquityTimeline;
   chartState.replayIndex   = 0;
-  chartState.speed         = Number(document.getElementById('replay-speed')?.value || 2);
   chartState.isPlaying     = false;
   chartState.initialized   = true;
   chartState.currentBotId  = bot.id;
@@ -1686,20 +1683,15 @@ async function initChart(botId) {
   setupReplayImport(bot);
   setupChartParameterLab(bot);
 
-  setReplayControlsVisible(replayMode);
-  if (replayMode) {
-    applyReplayFrame(0);
-    chart.timeScale().fitContent();
-  } else {
-    applyHistoryOrLiveFrame();
-    chart.timeScale().fitContent();
-    installAutoBackfill(bot);
-    if (chartState.mode === 'live' && chartState.followLive) {
-      chart.timeScale().scrollToRealTime();
-    }
-    if (chartState.mode === 'live') {
-      startLive(bot);
-    }
+  setReplayControlsVisible(chartState.mode === 'history');
+  applyHistoryOrLiveFrame();
+  chart.timeScale().fitContent();
+  installAutoBackfill(bot);
+  if (chartState.mode === 'live' && chartState.followLive) {
+    chart.timeScale().scrollToRealTime();
+  }
+  if (chartState.mode === 'live') {
+    startLive(bot);
   }
 }
 
@@ -2525,10 +2517,6 @@ function stopReplay() {
 }
 
 function applyReplayFrame(index) {
-  if (chartState.mode !== 'replay') {
-    applyHistoryOrLiveFrame();
-    return;
-  }
   if (!chartState.data || !chartState.candleSeries || !chartState.volumeSeries || !chartState.smaSeries) return;
   const safeIndex = Math.max(0, Math.min(index, chartState.data.candles.length - 1));
   chartState.replayIndex = safeIndex;
