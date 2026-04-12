@@ -2016,106 +2016,60 @@ function renderChartTradeLog(tradeLog, bot) {
 }
 
 function setupReplayControls() {
-  const playButton = document.getElementById('replay-play');
-  const backButton = document.getElementById('replay-step-back');
-  const nextButton = document.getElementById('replay-step-forward');
-  const scrubber = document.getElementById('replay-scrubber');
-  const speed = document.getElementById('replay-speed');
-  if (!playButton || !backButton || !nextButton || !scrubber || !speed || !chartState.data) return;
-
-  scrubber.max = String(Math.max(chartState.data.candles.length - 1, 0));
-  scrubber.value = String(chartState.replayIndex);
-
-  playButton.onclick = () => {
-    if (chartState.isPlaying) {
-      stopReplay();
-      return;
-    }
-    chartState.isPlaying = true;
-    playButton.classList.add('is-live');
-    playButton.textContent = 'Pause';
-    tickReplay();
-  };
-
-  backButton.onclick = () => {
-    stopReplay();
-    applyReplayFrame(Math.max(chartState.replayIndex - 1, 0));
-  };
-
-  nextButton.onclick = () => {
-    stopReplay();
-    applyReplayFrame(Math.min(chartState.replayIndex + 1, chartState.data.candles.length - 1));
-  };
-
-  scrubber.oninput = () => {
-    stopReplay();
-    applyReplayFrame(Number(scrubber.value));
-  };
-
-  speed.onchange = () => {
-    chartState.speed = Number(speed.value || 2);
-    if (chartState.isPlaying) {
-      stopReplay();
-      chartState.isPlaying = true;
-      playButton.classList.add('is-live');
-      playButton.textContent = 'Pause';
-      tickReplay();
-    }
-  };
+  if (!chartState.data) return;
 
   const randomSampleBtn = document.getElementById('replay-random-sample');
-  if (randomSampleBtn) {
-    randomSampleBtn.onclick = async () => {
-      stopReplay();
-      randomSampleBtn.disabled = true;
-      randomSampleBtn.textContent = '…';
-      try {
-        const bot = state.bots.find((b) => b.id === chartState.currentBotId) || state.bots[0];
-        const WINDOW = 150;
-        // Fetch & cache full history once per bot
-        if (!chartState.fullHistoryByBot[bot.id]) {
-          try {
-            const market = await fetchBinanceKlines(bot, 2000, chartState.marketType);
-            chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
-          } catch {
-            chartState.fullHistoryByBot[bot.id] = {
-              candles: chartState.data?.candles || [],
-              volumes: chartState.data?.volumes || [],
-            };
-          }
-        }
-        const full = chartState.fullHistoryByBot[bot.id];
-        const total = full.candles.length;
-        let slice, volSlice;
-        if (total <= WINDOW) {
-          slice = full.candles;
-          volSlice = full.volumes;
-        } else {
-          const start = Math.floor(Math.random() * (total - WINDOW));
-          slice = full.candles.slice(start, start + WINDOW);
-          volSlice = full.volumes.slice(start, start + WINDOW);
-        }
-        const pkg = buildReplayPackageFromCandles(slice, volSlice, bot);
-        chartState.data = { ...pkg, smaData: buildSma(pkg.candles, 20) };
-        chartState.replaySignals = pkg.replaySignals;
-        chartState.replayEquityTimeline = pkg.replayEquityTimeline;
-        chartState.replayIndex = 0;
-        scrubber.max = String(Math.max(pkg.candles.length - 1, 0));
-        // Update perf strip with this window's stats
-        renderChartControls(bot, pkg.summary);
-        setupReplayControls();
-        setupLayerToggles();
-        applyReplayFrame(0);
-        chartState.chart?.timeScale().fitContent();
-      } finally {
-        randomSampleBtn.disabled = false;
-        randomSampleBtn.textContent = '\u{1F3B2} Sample';
-      }
-    };
-  }
+  if (!randomSampleBtn) return;
 
-  playButton.classList.remove('is-live');
-  playButton.textContent = 'Play';
+  randomSampleBtn.onclick = async () => {
+    randomSampleBtn.disabled = true;
+    randomSampleBtn.textContent = 'Loading…';
+    try {
+      const bot = state.bots.find((b) => b.id === chartState.currentBotId) || state.bots[0];
+      const WINDOW = 500;
+      // Fetch & cache full history once per bot (3000 bars for wide sampling range)
+      if (!chartState.fullHistoryByBot[bot.id]) {
+        try {
+          const market = await fetchBinanceKlines(bot, 3000, chartState.marketType);
+          chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
+        } catch {
+          chartState.fullHistoryByBot[bot.id] = {
+            candles: chartState.data?.candles || [],
+            volumes: chartState.data?.volumes || [],
+          };
+        }
+      }
+      const full = chartState.fullHistoryByBot[bot.id];
+      const total = full.candles.length;
+      let slice, volSlice;
+      if (total <= WINDOW) {
+        slice = full.candles;
+        volSlice = full.volumes;
+      } else {
+        const start = Math.floor(Math.random() * (total - WINDOW));
+        slice = full.candles.slice(start, start + WINDOW);
+        volSlice = full.volumes.slice(start, start + WINDOW);
+      }
+      const pkg = buildReplayPackageFromCandles(slice, volSlice, bot);
+      chartState.data = { ...pkg, smaData: buildSma(pkg.candles, 20) };
+      chartState.replaySignals = pkg.replaySignals;
+      chartState.replayEquityTimeline = pkg.replayEquityTimeline;
+      chartState.replayIndex = 0;
+      // Show all bars at once
+      renderChartControls(bot, pkg.summary);
+      setupLayerToggles();
+      applyReplayFrame(pkg.candles.length - 1);
+      chartState.chart?.timeScale().fitContent();
+      // Show date range of sample
+      const from = new Date(slice[0].time * 1000).toLocaleDateString();
+      const to   = new Date(slice[slice.length - 1].time * 1000).toLocaleDateString();
+      const progress = document.getElementById('replay-progress');
+      if (progress) progress.textContent = `${from} – ${to} · ${pkg.summary.trades} trades`;
+    } finally {
+      randomSampleBtn.disabled = false;
+      randomSampleBtn.textContent = '\u{1F3B2} Random Sample';
+    }
+  };
 }
 
 function setupLayerToggles() {
@@ -2544,11 +2498,6 @@ function stopReplay() {
     chartState.timerId = null;
   }
   chartState.isPlaying = false;
-  const playButton = document.getElementById('replay-play');
-  if (playButton) {
-    playButton.classList.remove('is-live');
-    playButton.textContent = 'Play';
-  }
 }
 
 function applyReplayFrame(index) {
@@ -2575,9 +2524,6 @@ function applyReplayFrame(index) {
     chartState.showMarkers ? chartState.data.markers.filter((marker) => marker.time <= currentTime) : []
   );
   applyLevelVisibility();
-
-  const scrubber = document.getElementById('replay-scrubber');
-  if (scrubber) scrubber.value = String(safeIndex);
 
   const progress = document.getElementById('replay-progress');
   if (progress) progress.textContent = `Bar ${safeIndex + 1} / ${chartState.data.candles.length}`;
