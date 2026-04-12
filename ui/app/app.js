@@ -1731,6 +1731,12 @@ function setupTimeframePills(bot) {
 }
 
 function renderChartControls(activeBot, summary) {
+  // Write live summary back to bot so renderHero/renderBots show current stats
+  activeBot.winRate  = summary.winRate;
+  activeBot.netPl    = summary.netPl;
+  activeBot.drawdown = summary.maxDrawdown;
+  activeBot.trades   = summary.trades;
+
   const tabs = document.getElementById('chart-bot-tabs');
   tabs.innerHTML = state.bots.map((bot) =>
     `<button class="chart-bot-tab ${bot.id === activeBot.id ? 'is-active' : ''}" data-bot-id="${bot.id}">${bot.name}</button>`
@@ -2189,6 +2195,10 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
         bot.bosConfType = candidate.bosConfType;
         bot.tpType = candidate.tpType;
       }
+      bot.winRate  = candidate.summary.winRate;
+      bot.netPl    = candidate.summary.netPl;
+      bot.drawdown = candidate.summary.maxDrawdown;
+      bot.trades   = candidate.summary.trades;
       tpInput.value = String(candidate.tp);
       slInput.value = String(candidate.sl);
       thresholdInput.value = String(candidate.threshold);
@@ -2197,7 +2207,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
         ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}`
         : `TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}`;
       feedback.textContent = `Applied candidate #${idx + 1}: ${label}.`;
-      saveSettings();
+      void saveSettings();
       renderHero();
       renderBots();
       renderConfigForm();
@@ -2329,6 +2339,10 @@ function setupChartParameterLab(bot) {
       bot.bosConfType = best.bosConfType;
       bot.tpType = best.tpType;
     }
+    bot.winRate  = best.summary.winRate;
+    bot.netPl    = best.summary.netPl;
+    bot.drawdown = best.summary.maxDrawdown;
+    bot.trades   = best.summary.trades;
     tpInput.value = String(best.tp);
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
@@ -2337,6 +2351,7 @@ function setupChartParameterLab(bot) {
       : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
+    void saveSettings();
     renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback);
     renderHero();
     renderBots();
@@ -2689,6 +2704,7 @@ function botToRow(bot) {
       source1: bot.source1, source2: bot.source2,
       source3: bot.source3, source4: bot.source4,
       autoSignal: !!bot.autoSignal,
+      winRate: bot.winRate, netPl: bot.netPl, drawdown: bot.drawdown, trades: bot.trades,
     },
   };
 }
@@ -2698,7 +2714,8 @@ function applyBotRow(row) {
   if (!bot || !row.config) return;
   const editable = ['name', 'symbol', 'timeframe', 'webhookKey', 'tradeRelayUrl',
     'tradeRelayWebhookCode', 'tp', 'sl', 'threshold',
-    'source1', 'source2', 'source3', 'source4', 'autoSignal'];
+    'source1', 'source2', 'source3', 'source4', 'autoSignal',
+    'winRate', 'netPl', 'drawdown', 'trades'];
   editable.forEach((key) => { if (row.config[key] !== undefined) bot[key] = row.config[key]; });
 }
 
