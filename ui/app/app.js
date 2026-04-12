@@ -44,6 +44,29 @@ const state = {
       source3: 'KRAKEN:BTCUSD',
       source4: 'BITSTAMP:BTCUSD',
     },
+    {
+      id: 'h9s-btc-15m',
+      name: 'H9S / BTC',
+      symbol: 'BTCUSDT',
+      timeframe: '15m',
+      strategy: 'h9s',
+      tpType: 'dynamic',
+      webhookKey: 'H9S_BTC',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0,
+      netPl: 0,
+      drawdown: 0,
+      trades: 0,
+      tp: 1.0,
+      sl: 1.0,
+      threshold: 25,
+      source1: 'BINANCE:BTCUSDT',
+      source2: 'COINBASE:BTCUSD',
+      source3: 'KRAKEN:BTCUSD',
+      source4: 'BITSTAMP:BTCUSD',
+    },
   ],
   scenarios: [
     {
@@ -1048,7 +1071,138 @@ function percentileRank(values, value) {
   return (lessOrEqual / values.length) * 100;
 }
 
+function runH9SStrategy(candles, bot) {
+  const markers = [];
+  const tradeLog = [];
+  let openTrade = null;
+
+  const tpPct = Number(bot.tp) / 100;
+  const slPct = Number(bot.sl) / 100;
+  const swingSize = Math.max(2, Math.round(Number(bot.threshold) || 25));
+  const useDynamic = (bot.tpType || 'dynamic') === 'dynamic';
+
+  function atrAt(i) {
+    const period = 30;
+    if (i < 1) return candles[i].close * 0.02;
+    let sum = 0, count = 0;
+    for (let j = Math.max(1, i - period + 1); j <= i; j++) {
+      const c = candles[j], p = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+      count++;
+    }
+    return count > 0 ? sum / count : candles[i].close * 0.02;
+  }
+
+  let inTrade = false, isBull = false;
+  let highAct = true, lowAct = true;
+  let prevHigh = NaN, prevLow = NaN;
+  let entryBar = -1, entryPx = NaN, tpLvl = NaN, slLvl = NaN;
+  let lastEntryBar = -1, lastExitBar = -1;
+
+  for (let i = 0; i < candles.length; i++) {
+    const bar = candles[i];
+
+    // Confirm pivot at bar (i - swingSize) once both sides are visible
+    const pivIdx = i - swingSize;
+    if (pivIdx >= swingSize) {
+      const pivot = candles[pivIdx];
+      let isPivHigh = true, isPivLow = true;
+      for (let k = pivIdx - swingSize; k <= pivIdx + swingSize; k++) {
+        if (k === pivIdx) continue;
+        if (candles[k].high >= pivot.high) isPivHigh = false;
+        if (candles[k].low  <= pivot.low)  isPivLow  = false;
+      }
+      if (isPivHigh) { prevHigh = pivot.high; highAct = true; }
+      if (isPivLow)  { prevLow  = pivot.low;  lowAct  = true; }
+    }
+
+    // While in trade: consume (deactivate) pivots when candidate BOS occurs
+    if (inTrade) {
+      if (!isNaN(prevHigh) && bar.close > prevHigh && highAct) highAct = false;
+      if (!isNaN(prevLow)  && bar.close < prevLow  && lowAct)  lowAct  = false;
+    }
+
+    // EXIT: TP/SL
+    if (inTrade && i > entryBar && lastExitBar !== i) {
+      let hitTP = isBull ? bar.high >= tpLvl : bar.low  <= tpLvl;
+      let hitSL = isBull ? bar.low  <= slLvl : bar.high >= slLvl;
+      if (hitTP && hitSL) {
+        const dTP = Math.abs(bar.open - tpLvl), dSL = Math.abs(bar.open - slLvl);
+        if (dTP <= dSL) hitSL = false; else hitTP = false;
+      }
+      if (hitTP || hitSL) {
+        lastExitBar = i;
+        inTrade = false;
+        const exitPx = hitTP ? tpLvl : slLvl;
+        const pct = isBull
+          ? (exitPx - entryPx) / entryPx * 100
+          : (entryPx - exitPx) / entryPx * 100;
+        const reason = hitTP ? 'tp' : 'sl';
+        tradeLog.push({
+          dir: isBull ? 'long' : 'short',
+          entry: entryPx, tp: tpLvl, sl: slLvl,
+          exit: exitPx, pl: pct, reason,
+          entryTime: candles[entryBar].time, exitTime: bar.time,
+          entryIndex: entryBar, exitIndex: i,
+        });
+        markers.push({
+          time: bar.time,
+          position: isBull ? 'aboveBar' : 'belowBar',
+          color: hitTP ? '#27d3c5' : '#f7bc52',
+          shape: 'circle',
+          text: hitTP ? 'TP' : 'SL',
+          size: 0.8,
+        });
+      }
+    }
+
+    // ENTRY: BOS candle-close confirmation
+    const canEnter = !inTrade && lastEntryBar !== i && lastExitBar !== i;
+    if (canEnter && !isNaN(prevHigh) && !isNaN(prevLow)) {
+      let bullSig = false, bearSig = false;
+      if (bar.close > prevHigh && highAct)     { bullSig = true; highAct = false; }
+      else if (bar.close < prevLow && lowAct)  { bearSig = true; lowAct  = false; }
+
+      if (bullSig || bearSig) {
+        lastEntryBar = i;
+        inTrade = true;
+        isBull = bullSig;
+        entryBar = i;
+        entryPx = bar.close;
+        const atr = atrAt(i);
+        const dist  = useDynamic ? atr * 1.5 : entryPx * tpPct;
+        const sdist = useDynamic ? atr * 1.5 : entryPx * slPct;
+        tpLvl = bullSig ? entryPx + dist  : entryPx - dist;
+        slLvl = bullSig ? entryPx - sdist : entryPx + sdist;
+        markers.push({
+          time: bar.time,
+          position: bullSig ? 'belowBar' : 'aboveBar',
+          color: bullSig ? '#2ddb75' : '#ff6d6d',
+          shape: bullSig ? 'arrowUp' : 'arrowDown',
+          text: bullSig ? 'L' : 'S',
+          size: 1,
+        });
+      }
+    }
+  }
+
+  if (inTrade) {
+    openTrade = { entry: entryPx, tp: tpLvl, sl: slLvl, dir: isBull ? 'long' : 'short' };
+    tradeLog.push({
+      dir: isBull ? 'long' : 'short',
+      entry: entryPx, tp: tpLvl, sl: slLvl,
+      exit: null, pl: null, reason: 'open',
+      entryTime: candles[entryBar].time, exitTime: null,
+      entryIndex: entryBar, exitIndex: null,
+    });
+  }
+
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
+  if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
