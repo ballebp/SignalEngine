@@ -2296,10 +2296,23 @@ function setupChartParameterLab(bot) {
     void initChart(bot.id);
   };
 
-  optimizeButton.onclick = () => {
-    const source = chartState.data
-      ? { candles: chartState.data.candles, volumes: chartState.data.volumes }
-      : (chartState.importedCandlesByBot[bot.id] || generateChartBars(bot, Math.max(2000, getDesiredHistoryBars())));
+  optimizeButton.onclick = async () => {
+    // Always fetch maximum bars for optimizer so results are based on rich data
+    feedback.className = 'param-feedback';
+    feedback.textContent = 'Fetching data for optimizer…';
+    optimizeButton.disabled = true;
+    let source;
+    try {
+      const market = await fetchBinanceKlines(bot, 12000, chartState.marketType);
+      source = { candles: market.candles, volumes: market.volumes };
+    } catch {
+      source = chartState.data
+        ? { candles: chartState.data.candles, volumes: chartState.data.volumes }
+        : (chartState.importedCandlesByBot[bot.id] || generateChartBars(bot, Math.max(2000, getDesiredHistoryBars())));
+    } finally {
+      optimizeButton.disabled = false;
+    }
+    feedback.textContent = `Running optimizer on ${source.candles.length} bars…`;
     const candidates = [];
 
     if (bot.strategy === 'h9s') {
