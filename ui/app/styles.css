@@ -459,6 +459,13 @@ body.is-compact .panel-header h3 {
   gap: 12px;
 }
 
+.table-loading {
+  padding: 16px;
+  color: var(--text-secondary, #888);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 .log-item {
   padding: 14px;
 }

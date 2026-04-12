@@ -365,7 +365,23 @@ function renderBacktestSummary() {
     .join('');
 }
 
-function renderSignalTable() {
+async function renderSignalTable() {
+  signalTable.innerHTML = '<div class="table-loading">Loading…</div>';
+  let rows = [];
+  try {
+    const { data, error } = await db
+      .from('signal_log')
+      .select('created_at, bot_name, symbol, event, message, status')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (!error && Array.isArray(data)) rows = data;
+  } catch { /* offline — show empty */ }
+
+  if (!rows.length) {
+    signalTable.innerHTML = '<div class="table-loading">No signals fired yet.</div>';
+    return;
+  }
+
   signalTable.innerHTML = `
     <div class="table-header">
       <div>Timestamp</div>
@@ -375,20 +391,18 @@ function renderSignalTable() {
       <div>Message</div>
       <div>Status</div>
     </div>
-    ${state.signals
-      .map(
-        (signal) => `
-          <div class="table-row">
-            <div class="table-cell"><strong>${signal.timestamp}</strong><span>UTC replay log</span></div>
-            <div class="table-cell"><strong>${signal.bot}</strong></div>
-            <div class="table-cell"><strong>${signal.symbol}</strong></div>
-            <div class="table-cell"><strong>${signal.event}</strong></div>
-            <div class="table-cell"><strong>${signal.message}</strong></div>
-            <div class="table-cell"><strong class="${signal.status === 'Sent' ? 'is-positive' : ''}">${signal.status}</strong></div>
-          </div>
-        `
-      )
-      .join('')}
+    ${rows.map((r) => {
+      const ts = r.created_at ? new Date(r.created_at).toLocaleString('en-GB', { timeZone: 'UTC', hour12: false }).replace(',', '') + ' UTC' : '—';
+      return `
+        <div class="table-row">
+          <div class="table-cell"><strong>${ts}</strong></div>
+          <div class="table-cell"><strong>${r.bot_name || '—'}</strong></div>
+          <div class="table-cell"><strong>${r.symbol || '—'}</strong></div>
+          <div class="table-cell"><strong>${r.event || '—'}</strong></div>
+          <div class="table-cell"><strong>${r.message || '—'}</strong></div>
+          <div class="table-cell"><strong class="${r.status === 'sent' ? 'is-positive' : ''}">${r.status || '—'}</strong></div>
+        </div>`;
+    }).join('')}
   `;
 }
 
@@ -2269,59 +2283,10 @@ function renderStrategyStatsBoard() {
 
 function renderAll() {
   renderBots();
-  renderSignalTable();
   renderConfigForm();
   renderConfigPreview();
   renderStrategyStatsBoard();
   refreshTradeRelayPanel();
-}
-
-// ── Settings persistence ──────────────────────────────────────────────────────
-
-const STORAGE_KEY = 'signal-engine-bots-v1';
-
-function saveSettings() {
-  const saveable = state.bots.map((bot) => ({
-    id: bot.id,
-    name: bot.name,
-    symbol: bot.symbol,
-    timeframe: bot.timeframe,
-    webhookKey: bot.webhookKey,
-    tradeRelayUrl: bot.tradeRelayUrl,
-    tradeRelayWebhookCode: bot.tradeRelayWebhookCode,
-    tp: bot.tp,
-    sl: bot.sl,
-    threshold: bot.threshold,
-    source1: bot.source1,
-    source2: bot.source2,
-    source3: bot.source3,
-    source4: bot.source4,
-  }));
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(saveable));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function loadSavedSettings() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw);
-    if (!Array.isArray(saved)) return;
-    saved.forEach((saved_bot) => {
-      const bot = state.bots.find((b) => b.id === saved_bot.id);
-      if (!bot) return;
-      const editable = ['name', 'symbol', 'timeframe', 'webhookKey', 'tradeRelayUrl', 'tradeRelayWebhookCode', 'tp', 'sl', 'threshold', 'source1', 'source2', 'source3', 'source4'];
-      editable.forEach((key) => {
-        if (saved_bot[key] !== undefined) bot[key] = saved_bot[key];
-      });
-    });
-  } catch {
-    // corrupted storage — ignore
-  }
 }
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
@@ -2384,6 +2349,7 @@ async function logSignalToSupabase(bot, signalCode, event) {
       bot_id: bot.id, bot_name: bot.name,
       symbol: bot.symbol, event, message: signalCode, status: 'sent',
     });
+    renderSignalTable(); // refresh log table after each signal
   } catch { /* non-blocking */ }
 }
 
@@ -2408,8 +2374,11 @@ function setupSaveButton() {
 // Bootstrap: load settings first, then render
 loadSavedSettings().then(() => {
   renderAll();
+  renderSignalTable();
   setupTradeLogCollapse();
   setupTradeRelayTestPanel();
   setupSaveButton();
+  const refreshBtn = document.getElementById('signal-log-refresh-btn');
+  if (refreshBtn) refreshBtn.addEventListener('click', () => renderSignalTable());
   requestAnimationFrame(() => void initChart(state.selectedBotId));
 });
