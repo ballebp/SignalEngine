@@ -2026,11 +2026,15 @@ function setupReplayControls() {
     randomSampleBtn.textContent = 'Loading…';
     try {
       const bot = state.bots.find((b) => b.id === chartState.currentBotId) || state.bots[0];
-      const WINDOW = 500;
-      // Fetch & cache full history once per bot (3000 bars for wide sampling range)
+      // Bars per day by timeframe
+      const barsPerDayMap = { '1m':1440,'3m':480,'5m':288,'15m':96,'30m':48,'1h':24,'4h':6,'1d':1,'1w':1 };
+      const bpd = barsPerDayMap[String(bot.timeframe).toLowerCase()] ?? 96;
+      const WINDOW = Math.max(200, bpd * 30);        // ~30 days of bars
+      const FETCH  = Math.min(WINDOW * 4, 10000);    // fetch 4× window so there's sampling range
+      // Fetch & cache full history once per bot
       if (!chartState.fullHistoryByBot[bot.id]) {
         try {
-          const market = await fetchBinanceKlines(bot, 3000, chartState.marketType);
+          const market = await fetchBinanceKlines(bot, FETCH, chartState.marketType);
           chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
         } catch {
           chartState.fullHistoryByBot[bot.id] = {
@@ -2272,6 +2276,7 @@ function setupChartParameterLab(bot) {
     if (symbolChanged || timeframeChanged) {
       delete chartState.importedCandlesByBot[bot.id];
       delete chartState.importedSourceByBot[bot.id];
+      delete chartState.fullHistoryByBot[bot.id];
     }
 
     feedback.className = 'param-feedback good';
