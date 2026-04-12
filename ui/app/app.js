@@ -625,6 +625,7 @@ const chartState = {
   replayEquityTimeline: [],
   importedCandlesByBot: {},
   importedSourceByBot: {},
+  fullHistoryByBot: {},
   showCandles: true,
   showSma: true,
   showVolume: true,
@@ -2061,6 +2062,57 @@ function setupReplayControls() {
       tickReplay();
     }
   };
+
+  const randomSampleBtn = document.getElementById('replay-random-sample');
+  if (randomSampleBtn) {
+    randomSampleBtn.onclick = async () => {
+      stopReplay();
+      randomSampleBtn.disabled = true;
+      randomSampleBtn.textContent = '…';
+      try {
+        const bot = state.bots.find((b) => b.id === chartState.currentBotId) || state.bots[0];
+        const WINDOW = 150;
+        // Fetch & cache full history once per bot
+        if (!chartState.fullHistoryByBot[bot.id]) {
+          try {
+            const market = await fetchBinanceKlines(bot, 2000, chartState.marketType);
+            chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
+          } catch {
+            chartState.fullHistoryByBot[bot.id] = {
+              candles: chartState.data?.candles || [],
+              volumes: chartState.data?.volumes || [],
+            };
+          }
+        }
+        const full = chartState.fullHistoryByBot[bot.id];
+        const total = full.candles.length;
+        let slice, volSlice;
+        if (total <= WINDOW) {
+          slice = full.candles;
+          volSlice = full.volumes;
+        } else {
+          const start = Math.floor(Math.random() * (total - WINDOW));
+          slice = full.candles.slice(start, start + WINDOW);
+          volSlice = full.volumes.slice(start, start + WINDOW);
+        }
+        const pkg = buildReplayPackageFromCandles(slice, volSlice, bot);
+        chartState.data = { ...pkg, smaData: buildSma(pkg.candles, 20) };
+        chartState.replaySignals = pkg.replaySignals;
+        chartState.replayEquityTimeline = pkg.replayEquityTimeline;
+        chartState.replayIndex = 0;
+        scrubber.max = String(Math.max(pkg.candles.length - 1, 0));
+        // Update perf strip with this window's stats
+        renderChartControls(bot, pkg.summary);
+        setupReplayControls();
+        setupLayerToggles();
+        applyReplayFrame(0);
+        chartState.chart?.timeScale().fitContent();
+      } finally {
+        randomSampleBtn.disabled = false;
+        randomSampleBtn.textContent = '\u{1F3B2} Sample';
+      }
+    };
+  }
 
   playButton.classList.remove('is-live');
   playButton.textContent = 'Play';
