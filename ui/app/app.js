@@ -2166,7 +2166,7 @@ function scoreOptimizationCandidate(summary) {
   return score * tradeFactor;
 }
 
-function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback) {
+function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, source) {
   const container = document.getElementById('optimizer-results');
   if (!container) return;
   if (!candidates.length) {
@@ -2223,7 +2223,18 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       renderBots();
       renderConfigForm();
       renderConfigPreview();
-      void initChart(bot.id);
+      // Re-render on the same candles the optimizer used — no re-fetch
+      if (source) {
+        const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, bot);
+        chartState.data = { ...pkg, smaData: buildSma(pkg.candles, 20) };
+        chartState.replaySignals = pkg.replaySignals;
+        chartState.replayEquityTimeline = pkg.replayEquityTimeline;
+        renderChartControls(bot, pkg.summary);
+        applyHistoryOrLiveFrame();
+        chartState.chart?.timeScale().fitContent();
+      } else {
+        void initChart(bot.id);
+      }
     });
   });
 }
@@ -2340,7 +2351,7 @@ function setupChartParameterLab(bot) {
     if (!best) {
       feedback.className = 'param-feedback warn';
       feedback.textContent = 'AI optimize could not evaluate candidate sets.';
-      renderOptimizerResults([], bot, tpInput, slInput, thresholdInput, feedback);
+      renderOptimizerResults([], bot, tpInput, slInput, thresholdInput, feedback, source);
       return;
     }
 
@@ -2364,12 +2375,19 @@ function setupChartParameterLab(bot) {
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
     void saveSettings();
-    renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback);
+    renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, source);
     renderHero();
     renderBots();
     renderConfigForm();
     renderConfigPreview();
-    void initChart(bot.id);
+    // Re-render on the same candles the optimizer used — no re-fetch
+    const bestPkg = buildReplayPackageFromCandles(source.candles, source.volumes, bot);
+    chartState.data = { ...bestPkg, smaData: buildSma(bestPkg.candles, 20) };
+    chartState.replaySignals = bestPkg.replaySignals;
+    chartState.replayEquityTimeline = bestPkg.replayEquityTimeline;
+    renderChartControls(bot, bestPkg.summary);
+    applyHistoryOrLiveFrame();
+    chartState.chart?.timeScale().fitContent();
   };
 }
 
