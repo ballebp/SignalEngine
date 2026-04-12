@@ -1511,21 +1511,27 @@ async function initChart(botId) {
 function setupTimeframePills(bot) {
   const pills = document.querySelectorAll('#chart-time-pills .time-pill');
   if (!pills.length) return;
+  const currentTf = String(bot.timeframe || '5m').toLowerCase();
   pills.forEach((pill) => {
-    pill.classList.toggle('is-active', pill.dataset.tf === String(bot.timeframe).toLowerCase());
+    pill.classList.toggle('is-active', pill.dataset.tf === currentTf);
     pill.onclick = () => {
       const tf = String(pill.dataset.tf || '').toLowerCase();
-      if (!tf || tf === String(bot.timeframe).toLowerCase()) return;
-      bot.timeframe = tf;
-      delete chartState.importedCandlesByBot[bot.id];
-      delete chartState.importedSourceByBot[bot.id];
+      if (!tf) return;
+      // Always look up fresh bot so we never hold a stale closure reference
+      const activeBotId = chartState.currentBotId || state.selectedBotId;
+      const activeBot = state.bots.find((b) => b.id === activeBotId) || state.bots[0];
+      if (tf === String(activeBot.timeframe).toLowerCase()) return; // already this TF
+      activeBot.timeframe = tf;
+      delete chartState.importedCandlesByBot[activeBot.id];
+      delete chartState.importedSourceByBot[activeBot.id];
+      // Sync the param-lab select
       const timeframeInput = document.getElementById('chart-param-timeframe');
       if (timeframeInput) timeframeInput.value = tf;
       renderHero();
       renderBots();
       renderConfigForm();
       renderConfigPreview();
-      void initChart(bot.id);
+      void initChart(activeBot.id);
     };
   });
 }
@@ -1920,14 +1926,17 @@ function setupChartParameterLab(bot) {
   thresholdInput.value = String(bot.threshold);
 
   timeframeInput.onchange = () => {
-    const tf = String(timeframeInput.value || bot.timeframe).trim().toLowerCase();
-    if (!tf || tf === String(bot.timeframe).toLowerCase()) return;
-    bot.timeframe = tf;
-    delete chartState.importedCandlesByBot[bot.id];
-    delete chartState.importedSourceByBot[bot.id];
-    setupTimeframePills(bot);
+    const tf = String(timeframeInput.value || '').trim().toLowerCase();
+    if (!tf) return;
+    const activeBotId = chartState.currentBotId || state.selectedBotId;
+    const activeBot = state.bots.find((b) => b.id === activeBotId) || state.bots[0];
+    if (tf === String(activeBot.timeframe).toLowerCase()) return;
+    activeBot.timeframe = tf;
+    delete chartState.importedCandlesByBot[activeBot.id];
+    delete chartState.importedSourceByBot[activeBot.id];
+    setupTimeframePills(activeBot);
     renderHero(); renderBots(); renderConfigForm(); renderConfigPreview();
-    void initChart(bot.id);
+    void initChart(activeBot.id);
   };
 
   applyButton.onclick = () => {
