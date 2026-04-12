@@ -400,7 +400,7 @@ async function renderSignalTable() {
           <div class="table-cell"><strong>${r.symbol || '—'}</strong></div>
           <div class="table-cell"><strong>${r.event || '—'}</strong></div>
           <div class="table-cell"><strong>${r.message || '—'}</strong></div>
-          <div class="table-cell"><strong class="${r.status === 'sent' ? 'is-positive' : ''}">${r.status || '—'}</strong></div>
+          <div class="table-cell"><strong class="${r.status === 'sent' ? 'is-positive' : r.status === 'failed' || r.status === 'error' ? 'is-negative' : ''}">${r.status || '—'}</strong></div>
         </div>`;
     }).join('')}
   `;
@@ -584,8 +584,8 @@ const chartState = {
   followLive: false,
   barSpacing: 7,
   marketType: null,
-  autoSignal: false,
-  lastFiredSignalTime: null,
+  autoSignalByBot: {},       // botId -> boolean
+  lastFiredByBot: {},         // botId -> unix seconds (persisted across reloads)
   data: null,
   replaySignals: [],
   replayEquityTimeline: [],
@@ -784,6 +784,20 @@ function setModeStatus(extraText) {
   const modeStatus = document.getElementById('chart-mode-status');
   if (!modeStatus) return;
   modeStatus.textContent = extraText || getModeStatusText();
+}
+
+let _toastTimer = null;
+function showSignalToast(message, type = 'ok') {
+  let toast = document.getElementById('signal-fire-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'signal-fire-toast';
+    document.getElementById('tv-chart')?.parentElement?.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.className = `signal-fire-toast toast-${type} toast-visible`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.classList.remove('toast-visible'); }, 3500);
 }
 
 function getDesiredHistoryBars() {
@@ -1577,6 +1591,7 @@ function setupChartModeControls(bot) {
     if (chartState.mode !== 'live') {
       setFollowLive(false);
     }
+    syncAutoSignalBtn(bot);
     void initChart(bot.id);
   };
 
@@ -1667,29 +1682,39 @@ function setupChartNavigationTools(bot) {
 
   const autoSignalToggle = document.getElementById('chart-autosignal-toggle');
   if (autoSignalToggle) {
-    const syncAutoSignalBtn = () => {
-      const active = chartState.autoSignal;
-      const hasUrl = !!(getSelectedBotForChart()?.tradeRelayUrl);
-      autoSignalToggle.textContent = active ? 'Auto-Signal: ON' : 'Auto-Signal: Off';
-      autoSignalToggle.classList.toggle('is-live', active);
-      autoSignalToggle.title = hasUrl ? '' : 'Configure TradeRelay URL in Settings first';
-    };
+    syncAutoSignalBtn(bot);
     autoSignalToggle.onclick = () => {
-      const hasUrl = !!(getSelectedBotForChart()?.tradeRelayUrl);
-      if (!hasUrl) {
-        alert('Set the TradeRelay Bot URL in Settings → Current Config first.');
+      const isLive = chartState.mode === 'live';
+      if (!isLive) {
+        showSignalToast('Auto-Signal only works in Live mode', 'warn');
         return;
       }
-      chartState.autoSignal = !chartState.autoSignal;
-      if (chartState.autoSignal) {
-        // Arm at the latest known signal so we don't re-fire history
-        const signals = chartState.replaySignals || [];
-        chartState.lastFiredSignalTime = signals.length ? signals[signals.length - 1].time : null;
+      const hasUrl = !!(bot.tradeRelayUrl);
+      if (!hasUrl) {
+        showSignalToast('Set TradeRelay Bot URL in Settings first', 'warn');
+        return;
       }
-      syncAutoSignalBtn();
+      const current = !!chartState.autoSignalByBot[bot.id];
+      chartState.autoSignalByBot[bot.id] = !current;
+      if (!current) {
+        // Arm: set lastFired to now so we never re-fire old history
+        chartState.lastFiredByBot[bot.id] = Math.floor(Date.now() / 1000);
+      }
+      syncAutoSignalBtn(bot);
     };
-    syncAutoSignalBtn();
   }
+}
+
+function syncAutoSignalBtn(bot) {
+  const toggle = document.getElementById('chart-autosignal-toggle');
+  if (!toggle) return;
+  const isLive = chartState.mode === 'live';
+  const active = isLive && !!chartState.autoSignalByBot[bot?.id];
+  const hasUrl = !!(bot?.tradeRelayUrl);
+  toggle.textContent = active ? 'Auto-Signal: ON' : 'Auto-Signal: Off';
+  toggle.classList.toggle('is-live', active);
+  toggle.disabled = !isLive;
+  toggle.title = !isLive ? 'Switch to Live mode to use Auto-Signal' : hasUrl ? '' : 'Configure TradeRelay URL in Settings first';
 }
 
 function renderChartTradeLog(tradeLog, bot) {
@@ -2028,23 +2053,31 @@ function getSelectedBotForChart() {
 }
 
 async function fireNewLiveSignals(bot) {
-  if (!chartState.autoSignal) return;
+  if (!chartState.autoSignalByBot[bot.id]) return;
   if (!bot.tradeRelayUrl) return;
   const signals = chartState.replaySignals || [];
-  const lastFired = chartState.lastFiredSignalTime;
-  const newSignals = lastFired === null
-    ? signals.slice(-1)  // only most recent on first arm
-    : signals.filter((s) => s.time > lastFired);
+  // lastFiredByBot is set to Date.now()/1000 at arm-time, so we only see signals
+  // that appeared AFTER the toggle was switched on — no historical re-fires.
+  const lastFired = chartState.lastFiredByBot[bot.id] ?? Math.floor(Date.now() / 1000);
+  const newSignals = signals.filter((s) => s.time > lastFired);
   for (const signal of newSignals) {
+    let ok = false;
     try {
-      await sendTradeRelaySignal(bot.tradeRelayUrl, signal.code);
-      void logSignalToSupabase(bot, signal.code, signal.event);
-    } catch {
-      // network error — don't block subsequent signals
+      const res = await sendTradeRelaySignal(bot.tradeRelayUrl, signal.code);
+      ok = res.ok;
+      const status = ok ? 'sent' : 'failed';
+      void logSignalToSupabase(bot, signal.code, signal.event, status);
+      if (ok) {
+        showSignalToast(`⚡ ${signal.event} fired → TradeRelay`, 'ok');
+      } else {
+        showSignalToast(`✗ ${signal.event} rejected (${res.status})`, 'err');
+      }
+    } catch (e) {
+      void logSignalToSupabase(bot, signal.code, signal.event, 'error');
+      showSignalToast(`✗ ${signal.event} network error`, 'err');
     }
-  }
-  if (newSignals.length) {
-    chartState.lastFiredSignalTime = newSignals[newSignals.length - 1].time;
+    // Always advance cursor so next poll doesn't retry failed signals
+    chartState.lastFiredByBot[bot.id] = signal.time;
   }
 }
 
@@ -2386,11 +2419,11 @@ async function loadSavedSettings() {
   } catch { /* ignore */ }
 }
 
-async function logSignalToSupabase(bot, signalCode, event) {
+async function logSignalToSupabase(bot, signalCode, event, status = 'sent') {
   try {
     await db.from('signal_log').insert({
       bot_id: bot.id, bot_name: bot.name,
-      symbol: bot.symbol, event, message: signalCode, status: 'sent',
+      symbol: bot.symbol, event, message: signalCode, status,
     });
     renderSignalTable(); // refresh log table after each signal
   } catch { /* non-blocking */ }

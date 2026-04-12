@@ -921,6 +921,31 @@ body.is-compact .panel-header h3 {
   color: rgba(255, 255, 255, 0.04);
 }
 
+/* Auto-signal toast notification */
+.signal-fire-toast {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 50;
+  white-space: nowrap;
+}
+.signal-fire-toast.toast-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.signal-fire-toast.toast-ok  { background: rgba(45,219,117,0.18); color: #2ddb75; border: 1px solid rgba(45,219,117,0.35); }
+.signal-fire-toast.toast-err { background: rgba(255,109,109,0.18); color: #ff6d6d; border: 1px solid rgba(255,109,109,0.35); }
+.signal-fire-toast.toast-warn{ background: rgba(247,188,82,0.18);  color: #f7bc52; border: 1px solid rgba(247,188,82,0.35); }
+
 .chart-ohlcv-legend {
   position: absolute;
   top: 10px;
