@@ -424,27 +424,50 @@ function renderConfigForm() {
     ['source4', 'Source 4', bot.source4],
   ];
 
+  const TF_OPTIONS = ['1m','3m','5m','15m','30m','1h','4h','1d','1w'];
+
   configForm.innerHTML = fields
-    .map(
-      ([key, label, value]) => `
-        <div class="field ${key === 'tradeRelayUrl' || key === 'tradeRelayWebhookCode' || key.startsWith('source') ? 'field-wide' : ''}">
-          <label for="field-${key}">${label}</label>
-          <input id="field-${key}" name="${key}" value="${value}">
-        </div>
-      `
-    )
+    .map(([key, label, value]) => {
+      const wide = key === 'tradeRelayUrl' || key === 'tradeRelayWebhookCode' || key.startsWith('source');
+      if (key === 'timeframe') {
+        const options = TF_OPTIONS.map((tf) =>
+          `<option value="${tf}"${tf === String(value).toLowerCase() ? ' selected' : ''}>${tf}</option>`
+        ).join('');
+        return `<div class="field"><label for="field-${key}">${label}</label><select id="field-${key}" name="${key}">${options}</select></div>`;
+      }
+      return `<div class="field${wide ? ' field-wide' : ''}"><label for="field-${key}">${label}</label><input id="field-${key}" name="${key}" value="${value}"></div>`;
+    })
     .join('');
 
-  configForm.querySelectorAll('input').forEach((input) => {
-    input.addEventListener('input', () => {
+  configForm.querySelectorAll('input, select').forEach((el) => {
+    el.addEventListener('change', () => {
       const currentBot = getSelectedBot();
-      const parsedValue = ['tp', 'sl', 'threshold'].includes(input.name) ? Number(input.value || 0) : input.value;
-      currentBot[input.name] = parsedValue;
+      const parsedValue = ['tp', 'sl', 'threshold'].includes(el.name) ? Number(el.value || 0) : el.value;
+      currentBot[el.name] = parsedValue;
       renderConfigPreview();
       renderHero();
       renderBots();
       refreshTradeRelayPanel();
+      if (el.name === 'timeframe') {
+        delete chartState.importedCandlesByBot[currentBot.id];
+        delete chartState.importedSourceByBot[currentBot.id];
+        setupTimeframePills(currentBot);
+        const chartTfSelect = document.getElementById('chart-param-timeframe');
+        if (chartTfSelect) chartTfSelect.value = el.value;
+        void initChart(currentBot.id);
+      }
     });
+    if (el.tagName !== 'SELECT') {
+      el.addEventListener('input', () => {
+        const currentBot = getSelectedBot();
+        const parsedValue = ['tp', 'sl', 'threshold'].includes(el.name) ? Number(el.value || 0) : el.value;
+        currentBot[el.name] = parsedValue;
+        renderConfigPreview();
+        renderHero();
+        renderBots();
+        refreshTradeRelayPanel();
+      });
+    }
   });
 }
 
@@ -1891,10 +1914,21 @@ function setupChartParameterLab(bot) {
   if (!symbolInput || !timeframeInput || !tpInput || !slInput || !thresholdInput || !applyButton || !optimizeButton || !feedback) return;
 
   symbolInput.value = String(bot.symbol || '');
-  timeframeInput.value = String(bot.timeframe || '5m');
+  timeframeInput.value = String(bot.timeframe || '5m').toLowerCase();
   tpInput.value = String(bot.tp);
   slInput.value = String(bot.sl);
   thresholdInput.value = String(bot.threshold);
+
+  timeframeInput.onchange = () => {
+    const tf = String(timeframeInput.value || bot.timeframe).trim().toLowerCase();
+    if (!tf || tf === String(bot.timeframe).toLowerCase()) return;
+    bot.timeframe = tf;
+    delete chartState.importedCandlesByBot[bot.id];
+    delete chartState.importedSourceByBot[bot.id];
+    setupTimeframePills(bot);
+    renderHero(); renderBots(); renderConfigForm(); renderConfigPreview();
+    void initChart(bot.id);
+  };
 
   applyButton.onclick = () => {
     const nextSymbol = String(symbolInput.value || bot.symbol).trim().toUpperCase();
