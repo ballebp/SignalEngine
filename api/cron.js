@@ -1212,6 +1212,92 @@ function runFG1(candles, bot) {
   return signals;
 }
 
+// ── SM1 — Smart Money BOS ─────────────────────────────────────────────────────
+
+function runSM1(candles, bot) {
+  const swingSize = Math.max(3, Math.round(Number(bot.threshold || 25)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.0));
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const pivotHighs = [], pivotLows = [];
+  for (let i = swingSize; i < candles.length - swingSize; i++) {
+    let isHi = true, isLo = true;
+    for (let k = i - swingSize; k <= i + swingSize; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) isHi = false;
+      if (candles[k].low  <= candles[i].low)  isLo = false;
+    }
+    if (isHi) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLo)  pivotLows.push({ idx: i, price: candles[i].low  });
+  }
+
+  const signals = [];
+  let prevHigh = null, prevLow = null;
+  let prevHighActive = false, prevLowActive = false;
+  let prevHighIdx = 0, prevLowIdx = 0;
+  let phPtr = 0, plPtr = 0, position = null;
+  const warmup = swingSize * 2 + 14;
+
+  for (let i = warmup; i < candles.length; i++) {
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + swingSize) {
+      prevHigh = pivotHighs[phPtr].price;
+      prevHighIdx = pivotHighs[phPtr].idx;
+      prevHighActive = true;
+      phPtr++;
+    }
+    while (plPtr < pivotLows.length && i >= pivotLows[plPtr].idx + swingSize) {
+      prevLow = pivotLows[plPtr].price;
+      prevLowIdx = pivotLows[plPtr].idx;
+      prevLowActive = true;
+      plPtr++;
+    }
+    const bar = candles[i];
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' });
+        position = null;
+      }
+    }
+    if (!position) {
+      const atr = calcATR(i);
+      if (prevHighActive && prevHigh !== null && bar.close > prevHigh) {
+        prevHighActive = false;
+        let legHigh = -Infinity, legLow = Infinity;
+        for (let k = prevHighIdx; k <= i; k++) {
+          if (candles[k].high > legHigh) legHigh = candles[k].high;
+          if (candles[k].low  < legLow)  legLow  = candles[k].low;
+        }
+        const dist = Math.max(legHigh - legLow, atr) / 3;
+        position = { dir: 'long',  tp: bar.close + dist * tpMult, sl: bar.close - dist * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG',  dir: 'long',  kind: 'entry' });
+      } else if (prevLowActive && prevLow !== null && bar.close < prevLow) {
+        prevLowActive = false;
+        let legHigh = -Infinity, legLow = Infinity;
+        for (let k = prevLowIdx; k <= i; k++) {
+          if (candles[k].high > legHigh) legHigh = candles[k].high;
+          if (candles[k].low  < legLow)  legLow  = candles[k].low;
+        }
+        const dist = Math.max(legHigh - legLow, atr) / 3;
+        position = { dir: 'short', tp: bar.close - dist * tpMult, sl: bar.close + dist * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 // ── TradeRelay fire ───────────────────────────────────────────────────────────
 
 async function fireTradeRelay(url, code) {
@@ -1322,6 +1408,7 @@ export default async function handler(req, res) {
         else if (strategy === 'pm1')  signals = runPM1(candles, bot);
         else if (strategy === 'ob1')  signals = runOB1(candles, bot);
         else if (strategy === 'fg1')  signals = runFG1(candles, bot);
+        else if (strategy === 'sm1')  signals = runSM1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired
