@@ -2296,6 +2296,23 @@ function averageSummaries(summaries) {
   };
 }
 
+function applyParamsToChart(bot) {
+  // Immediately re-run the strategy on the currently loaded candles so the
+  // perf strip and equity curve update without waiting for a Binance re-fetch
+  if (!chartState.data?.candles?.length) return;
+  const rebuilt = buildReplayPackageFromCandles(
+    chartState.data.candles,
+    chartState.data.volumes || [],
+    bot
+  );
+  chartState.data = { ...rebuilt, smaData: buildSma(rebuilt.candles, 20) };
+  chartState.replaySignals = rebuilt.replaySignals;
+  chartState.replayEquityTimeline = rebuilt.replayEquityTimeline;
+  renderChartControls(bot, rebuilt.summary);
+  applyReplayFrame(rebuilt.candles.length - 1);
+  renderLiveEquity();
+}
+
 function scoreOptimizationCandidate(summary) {
   const tradeFactor = Math.max(0.2, Math.min(1, summary.trades / 35));
   const pfBoost = Math.min(summary.profitFactor, 5) * 3;
@@ -2366,6 +2383,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
         ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}${isB5S ? ` / ${candidate.maxTrades ?? 3}T` : ''}`
         : `TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}`;
       feedback.textContent = `Applied candidate #${idx + 1}: ${label}.`;
+      applyParamsToChart(bot);
       void saveSettings();
       renderHero();
       renderBots();
@@ -2719,6 +2737,7 @@ function setupChartParameterLab(bot) {
       : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
+    applyParamsToChart(bot);
     void saveSettings();
     renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, sources[0]);
     renderHero();
