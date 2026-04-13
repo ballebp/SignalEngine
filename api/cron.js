@@ -952,6 +952,82 @@ function runCH1(candles, bot) {
   return signals;
 }
 
+// ── PM1 — RSI/SMA Pivot Momentum ─────────────────────────────────────────────
+
+function runPM1(candles, bot) {
+  const rsiPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.0));
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  function calcRSI(endIdx) {
+    const len = rsiPeriod;
+    if (endIdx < len) return 50;
+    let gains = 0, losses = 0;
+    for (let j = endIdx - len + 1; j <= endIdx; j++) {
+      const diff = candles[j].close - candles[j - 1].close;
+      if (diff > 0) gains += diff; else losses -= diff;
+    }
+    const rs = losses === 0 ? 100 : gains / losses;
+    return 100 - 100 / (1 + rs);
+  }
+
+  function calcRSISMA(endIdx) {
+    let sum = 0;
+    for (let j = endIdx - rsiPeriod + 1; j <= endIdx; j++) sum += calcRSI(j);
+    return sum / rsiPeriod;
+  }
+
+  function calcSMA50(endIdx) {
+    const len = 50;
+    if (endIdx < len - 1) return candles[endIdx].close;
+    let sum = 0;
+    for (let j = endIdx - len + 1; j <= endIdx; j++) sum += candles[j].close;
+    return sum / len;
+  }
+
+  const signals = [];
+  const warmup  = rsiPeriod * 2 + 50 + 14;
+  let position  = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+    const atr = calcATR(i);
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position) {
+      const rsi      = calcRSI(i);
+      const rsiPrev  = calcRSI(i - 1);
+      const rsma     = calcRSISMA(i);
+      const rsmaPrev = calcRSISMA(i - 1);
+      const sma50    = calcSMA50(i);
+      const inZone   = rsi >= 35 && rsi <= 65;
+
+      if (rsiPrev <= rsmaPrev && rsi > rsma && inZone && bar.close >= sma50 - 1.5 * atr && bar.close <= sma50 + 3 * atr) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (rsiPrev >= rsmaPrev && rsi < rsma && inZone && bar.close <= sma50 + 1.5 * atr && bar.close >= sma50 - 3 * atr) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 // ── Signal code builder ───────────────────────────────────────────────────────
 
 function signalCode(bot, event) {
@@ -1066,6 +1142,7 @@ export default async function handler(req, res) {
         else if (strategy === 'e3')   signals = runE3(candles, bot);
         else if (strategy === 'cv1')  signals = runCV1(candles, bot);
         else if (strategy === 'ch1')  signals = runCH1(candles, bot);
+        else if (strategy === 'pm1')  signals = runPM1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired
