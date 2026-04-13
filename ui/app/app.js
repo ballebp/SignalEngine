@@ -2720,38 +2720,78 @@ function runStrategySimulation(candles, bot) {
 
 function summarizeTradeLog(tradeLog, candles) {
   const closedTrades = tradeLog.filter((trade) => trade.pl !== null);
-  const wins = closedTrades.filter((trade) => trade.pl > 0).length;
-  const losses = closedTrades.filter((trade) => trade.pl <= 0).length;
-  const winRate = closedTrades.length ? (wins / closedTrades.length) * 100 : 0;
-  let grossProfit = 0;
-  let grossLoss = 0;
+  const wins   = closedTrades.filter((trade) => trade.pl > 0);
+  const losses = closedTrades.filter((trade) => trade.pl <= 0);
+  const winRate = closedTrades.length ? (wins.length / closedTrades.length) * 100 : 0;
+  let grossProfit = 0, grossLoss = 0;
   for (const trade of closedTrades) {
     if (trade.pl > 0) grossProfit += trade.pl;
-    if (trade.pl < 0) grossLoss += Math.abs(trade.pl);
+    if (trade.pl < 0) grossLoss  += Math.abs(trade.pl);
   }
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99 : 0);
 
+  // Per-trade averages
+  const avgWin  = wins.length   ? wins.reduce((s, t) => s + t.pl, 0)   / wins.length   : 0;
+  const avgLoss = losses.length ? losses.reduce((s, t) => s + Math.abs(t.pl), 0) / losses.length : 0;
+
+  // Expectancy = (WR × avgWin) − (LR × avgLoss) — the edge per trade in %
+  const wr = winRate / 100;
+  const expectancy = (wr * avgWin) - ((1 - wr) * avgLoss);
+
+  // Max consecutive losses
+  let maxConsecLosses = 0, curConsec = 0;
+  for (const t of closedTrades) {
+    if (t.pl <= 0) { curConsec++; maxConsecLosses = Math.max(maxConsecLosses, curConsec); }
+    else curConsec = 0;
+  }
+
   const timeline = buildReplayEquityTimeline(candles, tradeLog);
   const endingEquity = timeline.length ? timeline[timeline.length - 1].equity : 100;
-  let peak = 100;
-  let maxDrawdown = 0;
+  let peak = 100, maxDrawdown = 0;
   for (const item of timeline) {
     peak = Math.max(peak, item.equity);
     const dd = peak > 0 ? ((peak - item.equity) / peak) * 100 : 0;
     maxDrawdown = Math.max(maxDrawdown, dd);
   }
+  const netPl = ((endingEquity - 100) / 100) * 100;
+
+  // Recovery Factor = net profit / max drawdown (how well strategy recovers)
+  const recoveryFactor = maxDrawdown > 0 ? Math.abs(netPl) / maxDrawdown : (netPl > 0 ? 10 : 0);
+
+  // Sharpe-like ratio: mean per-trade return / stddev of per-trade returns
+  // (trade-level, not time-series — suitable for optimizer ranking)
+  let sharpe = 0, sortino = 0;
+  if (closedTrades.length > 1) {
+    const returns = closedTrades.map(t => t.pl);
+    const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+    const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length;
+    const stdDev   = Math.sqrt(variance);
+    sharpe = stdDev > 0 ? mean / stdDev : (mean > 0 ? 5 : -5);
+
+    // Sortino: only penalize downside (negative) returns
+    const downsideVariance = returns.filter(r => r < 0).reduce((s, v) => s + v ** 2, 0) / returns.length;
+    const downsideDev = Math.sqrt(downsideVariance);
+    sortino = downsideDev > 0 ? mean / downsideDev : (mean > 0 ? 5 : -5);
+  }
 
   return {
     trades: closedTrades.length,
-    wins,
-    losses,
+    wins: wins.length,
+    losses: losses.length,
     winRate,
     grossProfit,
     grossLoss,
     profitFactor,
-    netPl: ((endingEquity - 100) / 100) * 100,
+    netPl,
     maxDrawdown,
     endingEquity,
+    avgWin,
+    avgLoss,
+    expectancy,
+    recoveryFactor,
+    maxConsecLosses,
+    sharpe,
+    sortino,
   };
 }
 
@@ -3062,12 +3102,18 @@ function renderChartControls(activeBot, summary) {
 
   const pfText = Number.isFinite(summary.profitFactor) ? summary.profitFactor.toFixed(2) : '-';
   const pfTone = Number.isFinite(summary.profitFactor) && summary.profitFactor >= 1 ? 'is-positive' : 'is-negative';
+  const sortinoVal = Number.isFinite(summary.sortino) ? summary.sortino.toFixed(2) : '-';
+  const sortinoTone = (summary.sortino ?? 0) >= 0.5 ? 'is-positive' : (summary.sortino ?? 0) < 0 ? 'is-negative' : '';
+  const edgeVal = Number.isFinite(summary.expectancy) ? `${summary.expectancy.toFixed(2)}%` : '-';
+  const edgeTone = (summary.expectancy ?? 0) > 0 ? 'is-positive' : 'is-negative';
   document.getElementById('chart-perf-strip').innerHTML = [
     ['Win Rate', `${summary.winRate.toFixed(2)}%`, summary.winRate > 50 ? 'is-positive' : 'is-negative'],
     ['Net P/L', formatPercent(summary.netPl), summary.netPl > 0 ? 'is-positive' : 'is-negative'],
     ['Max DD', `${summary.maxDrawdown.toFixed(2)}%`, 'is-negative'],
     ['Trades', String(summary.trades), ''],
     ['PF', pfText, pfTone],
+    ['Sortino', sortinoVal, sortinoTone],
+    ['Edge', edgeVal, edgeTone],
     ['W / L', `${summary.wins} / ${summary.losses}`, ''],
   ].map(([label, value, tone]) =>
     `<div class="chart-perf-item">` +
@@ -3441,7 +3487,11 @@ function parseLocaleNumber(rawValue, fallback) {
 }
 
 function averageSummaries(summaries) {
-  if (!summaries.length) return { netPl: 0, maxDrawdown: 0, winRate: 50, trades: 0, profitFactor: 1, consistency: 0, netPlStdDev: 0 };
+  if (!summaries.length) return {
+    netPl: 0, maxDrawdown: 0, winRate: 50, trades: 0, profitFactor: 1,
+    consistency: 0, netPlStdDev: 0, avgWin: 0, avgLoss: 0, expectancy: 0,
+    recoveryFactor: 0, maxConsecLosses: 0, sharpe: 0, sortino: 0,
+  };
   const n = summaries.length;
   const profitableCount = summaries.filter(s => s.netPl > 0).length;
   const consistency = profitableCount / n;
@@ -3449,14 +3499,22 @@ function averageSummaries(summaries) {
   const netPlStdDev = n > 1
     ? Math.sqrt(summaries.reduce((s, x) => s + (x.netPl - avgNetPl) ** 2, 0) / n)
     : 0;
+  const avg = (key, cap) => summaries.reduce((s, x) => s + Math.min(x[key] ?? 0, cap ?? Infinity), 0) / n;
   return {
-    netPl:        avgNetPl,
-    maxDrawdown:  summaries.reduce((s, x) => s + x.maxDrawdown, 0) / n,
-    winRate:      summaries.reduce((s, x) => s + x.winRate, 0) / n,
-    trades:       Math.round(summaries.reduce((s, x) => s + x.trades, 0) / n),
-    profitFactor: summaries.reduce((s, x) => s + Math.min(x.profitFactor ?? 1, 20), 0) / n,
+    netPl:            avgNetPl,
+    maxDrawdown:      avg('maxDrawdown'),
+    winRate:          avg('winRate'),
+    trades:           Math.round(avg('trades')),
+    profitFactor:     avg('profitFactor', 20),
     consistency,
     netPlStdDev,
+    avgWin:           avg('avgWin'),
+    avgLoss:          avg('avgLoss'),
+    expectancy:       avg('expectancy'),
+    recoveryFactor:   avg('recoveryFactor', 20),
+    maxConsecLosses:  avg('maxConsecLosses'),
+    sharpe:           summaries.reduce((s, x) => s + (x.sharpe ?? 0), 0) / n,
+    sortino:          summaries.reduce((s, x) => s + (x.sortino ?? 0), 0) / n,
   };
 }
 
@@ -3477,16 +3535,57 @@ function applyParamsToChart(bot) {
   renderLiveEquity();
 }
 
+// ── AI Optimization Scoring ───────────────────────────────────────────────────
+// Multi-factor scoring inspired by institutional-grade optimizer design:
+//
+//  CORE METRICS (risk-adjusted)
+//  • Sortino ratio  — mean trade return / downside deviation (rewards upside volatility)
+//  • Profit Factor  — gross win / gross loss (raw edge quality, capped at 5×)
+//  • Recovery Factor — net profit / max drawdown (how efficiently losses are recovered)
+//
+//  EDGE METRICS
+//  • Expectancy     — (WR × avgWin) − (LR × avgLoss) = avg dollar edge per trade
+//  • Win-rate bonus — above 50% gets a modest reward, but not over-weighted
+//
+//  ROBUSTNESS PENALTIES
+//  • Drawdown penalty  — direct penalisation of max drawdown
+//  • Consistency gate  — fraction of sampled periods that were profitable
+//  • Return std-dev    — penalises lucky outlier periods vs. steady returns
+//  • Trade count gate  — parameter sets with < 15 trades are down-weighted
+//                        (too few trades = untestable, not necessarily bad)
+//
+// The composite score is dimensionless and suitable for cross-strategy ranking.
 function scoreOptimizationCandidate(summary) {
-  const tradeFactor = Math.max(0.2, Math.min(1, summary.trades / 35));
-  const pfBoost = Math.min(summary.profitFactor, 5) * 3;
-  const edgeBoost = (summary.winRate - 50) * 0.18;
-  // Consistency bonus: reward strategies that are profitable across all sampled periods
-  const consistencyBonus = (summary.consistency ?? 1) * 8;
-  // Smoothness penalty: if stdDev of per-period returns is high, penalise (lucky outlier)
-  const smoothnessPenalty = (summary.netPlStdDev ?? 0) * 0.3;
-  const score = (summary.netPl * 1.2) - (summary.maxDrawdown * 0.72) + pfBoost + edgeBoost + consistencyBonus - smoothnessPenalty;
-  return score * tradeFactor;
+  // Gate on trade count — ramp from 0.15 at 1 trade to 1.0 at 40+ trades
+  const tradeFactor = Math.max(0.15, Math.min(1.0, summary.trades / 40));
+
+  // Sortino (downside-adjusted return per trade); cap at ±6 to prevent domination
+  const sortinoScore = Math.max(-6, Math.min(6, summary.sortino ?? 0)) * 6;
+
+  // Profit factor contribution (cap at 5× so extreme PF doesn't mask other weaknesses)
+  const pfScore = Math.min(summary.profitFactor ?? 1, 5) * 3.5;
+
+  // Recovery factor (net profit efficiency vs drawdown risk); cap at 10×
+  const rfScore = Math.min(summary.recoveryFactor ?? 0, 10) * 1.5;
+
+  // Expectancy per trade (raw %)
+  const expScore = (summary.expectancy ?? 0) * 0.8;
+
+  // Win-rate edge (distance above random — 50% baseline)
+  const wrEdge = ((summary.winRate ?? 50) - 50) * 0.15;
+
+  // Drawdown penalty — quadratic beyond 20% to strongly penalise deep drawdowns
+  const dd = summary.maxDrawdown ?? 0;
+  const ddPenalty = dd <= 20 ? dd * 0.6 : 20 * 0.6 + (dd - 20) * 1.4;
+
+  // Cross-period consistency: fraction of sampled windows that were profitable
+  const consistencyBonus = (summary.consistency ?? 1) * 9;
+
+  // Return volatility penalty: punishes lucky outliers that inflate avg
+  const stdPenalty = (summary.netPlStdDev ?? 0) * 0.35;
+
+  const raw = sortinoScore + pfScore + rfScore + expScore + wrEdge + consistencyBonus - ddPenalty - stdPenalty;
+  return raw * tradeFactor;
 }
 
 function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, source) {
@@ -3537,6 +3636,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
         <div class="optimizer-main">
           <strong>${paramStr}</strong>
           <div class="optimizer-sub">${formatPercent(candidate.summary.netPl)} net • ${candidate.summary.maxDrawdown.toFixed(2)}% DD • ${candidate.summary.winRate.toFixed(2)}% WR • ${candidate.summary.trades} trades</div>
+          <div class="optimizer-sub" style="opacity:0.7;font-size:0.78em">Sortino ${(candidate.summary.sortino ?? 0).toFixed(2)} • PF ${Math.min(candidate.summary.profitFactor ?? 1, 99).toFixed(2)} • RF ${Math.min(candidate.summary.recoveryFactor ?? 0, 99).toFixed(2)} • Edge ${(candidate.summary.expectancy ?? 0).toFixed(2)}%</div>
         </div>
         <button class="ghost-button replay-btn optimizer-apply" data-optimizer-index="${idx}" type="button">Apply</button>
       </article>
@@ -4105,15 +4205,17 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
-    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1'].includes(bot.strategy);
-    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : 'ROC';
+    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1'].includes(bot.strategy);
+    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : 'Swing';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
       : isATRBest
       ? `TP ${best.tp}× / SL ${best.sl}× / ${atrThLblB} ${best.threshold}`
       : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
-    feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
+    const sortinoBest = (best.summary.sortino ?? 0).toFixed(2);
+    const expectBest  = (best.summary.expectancy ?? 0).toFixed(2);
+    feedback.textContent = `AI best: ${bestLabel} → ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR, Sortino ${sortinoBest}, Edge ${expectBest}%`;
     applyParamsToChart(bot);
     void saveSettings();
     renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, sources[0]);
