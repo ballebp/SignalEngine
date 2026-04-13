@@ -880,8 +880,11 @@ function mergeMarketData(existingCandles, existingVolumes, incomingCandles, inco
 
 function setReplayControlsVisible(visible) {
   const controls = document.getElementById('replay-controls');
-  if (!controls) return;
-  controls.classList.toggle('is-hidden', !visible);
+  if (controls) controls.classList.toggle('is-hidden', !visible);
+  const rnd = document.getElementById('replay-random-sample');
+  const prog = document.getElementById('replay-progress');
+  if (rnd) rnd.style.display = visible ? '' : 'none';
+  if (prog) prog.style.display = visible ? '' : 'none';
 }
 
 function getModeStatusText() {

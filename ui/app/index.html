@@ -126,6 +126,9 @@
                 <option value="12000">12,000</option>
               </select>
               <span class="chart-mode-status" id="chart-mode-status">Live mode</span>
+              <span class="chart-mode-sep">|</span>
+              <button class="ghost-button replay-btn" id="replay-random-sample" type="button" title="Load a random 500-bar period from history">&#127922; Random Sample</button>
+              <span id="replay-progress" class="replay-progress"></span>
             </div>
           </div>
           <div class="chart-controls-row">
@@ -138,22 +141,7 @@
             </button>
           </div>
         </div>
-        <div class="replay-controls" id="replay-controls">
-          <div class="replay-button-stack">
-            <button class="ghost-button replay-btn" id="replay-random-sample" type="button" title="Load a random 500-bar period from history">&#127922; Random Sample</button>
-            <span id="replay-progress" class="replay-progress"></span>
-          </div>
-        </div>
-        <div class="chart-tools-row">
-          <div class="replay-layer-toggles" id="replay-layer-toggles">
-            <label><input id="toggle-candles" type="checkbox" checked> Candles</label>
-            <label><input id="toggle-sma" type="checkbox" checked> SMA</label>
-            <label><input id="toggle-volume" type="checkbox" checked> Volume</label>
-            <label><input id="toggle-markers" type="checkbox" checked> Entries/Exits</label>
-            <label><input id="toggle-levels" type="checkbox" checked> TP/SL Lines</label>
-          </div>
-
-        </div>
+        <div class="replay-controls is-hidden" id="replay-controls"></div>
 
         <div class="chart-parameter-lab" id="chart-parameter-lab">
           <div class="param-fields">
@@ -287,6 +275,14 @@
               <button class="chart-left-btn" id="chart-follow-toggle" title="Follow Price">&#9678;</button>
               <button class="chart-left-btn" id="chart-reset-view" title="Reset View">&#8635;</button>
               <button class="chart-left-btn" id="chart-load-more"  title="Load More History">&#8617;</button>
+              <div class="chart-left-divider"></div>
+              <div class="replay-layer-toggles" id="replay-layer-toggles">
+                <label title="Candles"><input id="toggle-candles" type="checkbox" checked> Candles</label>
+                <label title="SMA"><input id="toggle-sma" type="checkbox" checked> SMA</label>
+                <label title="Volume"><input id="toggle-volume" type="checkbox" checked> Volume</label>
+                <label title="Entries/Exits"><input id="toggle-markers" type="checkbox" checked> Entries/Exits</label>
+                <label title="TP/SL Lines"><input id="toggle-levels" type="checkbox" checked> TP/SL Lines</label>
+              </div>
             </aside>
             <div class="chart-core-area">
               <div class="chart-ohlcv-legend" id="chart-ohlcv-legend"></div>

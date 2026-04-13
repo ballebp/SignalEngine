@@ -857,6 +857,17 @@ body.is-compact .panel-header h3 {
   font-size: 12px;
 }
 
+.chart-mode-sep {
+  color: rgba(128, 156, 181, 0.3);
+  font-size: 14px;
+  padding: 0 2px;
+}
+
+#replay-random-sample,
+#replay-progress {
+  display: none;
+}
+
 .chart-mode-select {
   background: rgba(4, 11, 18, 0.92);
   border: 1px solid var(--line);
@@ -981,15 +992,35 @@ body.is-compact .panel-header h3 {
   background: rgba(12, 20, 30, 0.78);
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 6px;
   padding: 10px 5px;
   user-select: none;
 }
 
+.chart-left-divider {
+  height: 1px;
+  background: rgba(128, 156, 181, 0.14);
+  margin: 4px 0;
+}
+
+.chart-left-tools .replay-layer-toggles {
+  flex-direction: column;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.chart-left-tools .replay-layer-toggles label {
+  padding: 5px 7px;
+  font-size: 11px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+
 .chart-left-btn {
   width: 30px;
   height: 30px;
+  align-self: center;
   border: 1px solid rgba(128, 156, 181, 0.18);
   border-radius: 7px;
   background: transparent;
