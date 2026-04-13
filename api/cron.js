@@ -1028,6 +1028,103 @@ function runPM1(candles, bot) {
   return signals;
 }
 
+// ── OB1 — Order Block Retest ─────────────────────────────────────────────────
+
+function runOB1(candles, bot) {
+  const zigLen  = Math.max(3, Math.round(Number(bot.threshold || 9)));
+  const tpMult  = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult  = Math.max(0.3, Number(bot.sl || 1.2));
+  const fibFact = 0.33;
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Pre-compute confirmed pivots
+  const pivotHighs = [], pivotLows = [];
+  for (let i = zigLen; i < candles.length - zigLen; i++) {
+    let isHi = true, isLo = true;
+    for (let k = i - zigLen; k <= i + zigLen; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) isHi = false;
+      if (candles[k].low  <= candles[i].low)  isLo = false;
+    }
+    if (isHi) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLo)  pivotLows.push({ idx: i, price: candles[i].low  });
+  }
+
+  const recentHighs = [], recentLows = [];
+  let phPtr = 0, plPtr = 0, market = 0;
+  let bullOB = null, bearOB = null, position = null;
+  const signals  = [];
+  const warmup   = zigLen * 2 + 14 + 5;
+
+  for (let i = warmup; i < candles.length; i++) {
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + zigLen) {
+      recentHighs.push(pivotHighs[phPtr++]);
+      if (recentHighs.length > 2) recentHighs.shift();
+    }
+    while (plPtr < pivotLows.length && i >= pivotLows[plPtr].idx + zigLen) {
+      recentLows.push(pivotLows[plPtr++]);
+      if (recentLows.length > 2) recentLows.shift();
+    }
+
+    const bar = candles[i];
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' });
+        position = null; bullOB = null; bearOB = null;
+      }
+    }
+
+    if (recentHighs.length >= 2 && recentLows.length >= 2) {
+      const h0 = recentHighs[recentHighs.length - 1], h1 = recentHighs[recentHighs.length - 2];
+      const l0 = recentLows[recentLows.length - 1],  l1 = recentLows[recentLows.length - 2];
+      if (market <= 0 && h0.price > h1.price && h0.price > h1.price + Math.abs(h1.price - l0.price) * fibFact) {
+        market = 1;
+        const s = Math.min(h1.idx, l0.idx), e = Math.max(h1.idx, l0.idx);
+        let obIdx = -1;
+        for (let k = s; k <= e; k++) { if (candles[k].open > candles[k].close) obIdx = k; }
+        bullOB = obIdx >= 0 ? { obHigh: candles[obIdx].high, obLow: candles[obIdx].low } : null;
+        bearOB = null;
+      } else if (market >= 0 && l0.price < l1.price && l0.price < l1.price - Math.abs(h0.price - l1.price) * fibFact) {
+        market = -1;
+        const s = Math.min(l1.idx, h0.idx), e = Math.max(l1.idx, h0.idx);
+        let obIdx = -1;
+        for (let k = s; k <= e; k++) { if (candles[k].open < candles[k].close) obIdx = k; }
+        bearOB = obIdx >= 0 ? { obHigh: candles[obIdx].high, obLow: candles[obIdx].low } : null;
+        bullOB = null;
+      }
+    }
+
+    if (bullOB && bar.close < bullOB.obLow)  bullOB = null;
+    if (bearOB && bar.close > bearOB.obHigh) bearOB = null;
+
+    if (!position) {
+      const atr = calcATR(i);
+      if (bullOB && bar.close >= bullOB.obLow && bar.close <= bullOB.obHigh) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+        bullOB = null;
+      } else if (bearOB && bar.close >= bearOB.obLow && bar.close <= bearOB.obHigh) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+        bearOB = null;
+      }
+    }
+  }
+  return signals;
+}
+
 // ── Signal code builder ───────────────────────────────────────────────────────
 
 function signalCode(bot, event) {
@@ -1143,6 +1240,7 @@ export default async function handler(req, res) {
         else if (strategy === 'cv1')  signals = runCV1(candles, bot);
         else if (strategy === 'ch1')  signals = runCH1(candles, bot);
         else if (strategy === 'pm1')  signals = runPM1(candles, bot);
+        else if (strategy === 'ob1')  signals = runOB1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired

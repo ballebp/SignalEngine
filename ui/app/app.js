@@ -266,6 +266,21 @@ const state = {
       sl: 1.0,       // ATR multiplier for SL
       threshold: 14, // RSI period
     },
+    {
+      id: 'ob1-sol-4h',
+      name: 'OB1 / Order Block Retest',
+      symbol: 'SOLUSDT',
+      timeframe: '4h',
+      strategy: 'ob1',
+      webhookKey: 'OB1_SOL',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.5,       // ATR multiplier for TP
+      sl: 1.2,       // ATR multiplier for SL
+      threshold: 9,  // ZigZag pivot half-window (bars each side)
+    },
   ],
   scenarios: [
     {
@@ -2724,6 +2739,153 @@ function runPM1Strategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+// ── OB1 — Order Block Retest ──────────────────────────────────────────────────
+// Inspired by: SPMANUEL1 MSB & Order Block (EmreKb)
+// Logic:
+//   1. Detect swing pivot highs/lows using zigLen bars either side.
+//   2. Maintain the last two confirmed pivot highs (h0, h1) and lows (l0, l1).
+//   3. Bullish MSB: h0 breaks above h1 by at least fib(h1-l0)*0.33 — market flips bullish.
+//      → Find Bu-OB: last bearish candle (open>close) in the corrective leg h1→l0.
+//   4. Bearish MSB: l0 breaks below l1 by at least fib(h0-l1)*0.33 — market flips bearish.
+//      → Find Be-OB: last bullish candle (open<close) in the rally leg l1→h0.
+//   5. Enter on retest: price closes inside the OB zone → TP/SL via ATR multiples.
+//      OB is invalidated (deleted) if price closes beyond the opposite edge of the zone.
+function runOB1Strategy(candles, bot) {
+  const zigLen  = Math.max(3, Math.round(Number(bot.threshold || 9)));
+  const tpMult  = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult  = Math.max(0.3, Number(bot.sl || 1.2));
+  const fibFact = 0.33;
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Pre-compute confirmed pivot highs/lows (must have zigLen bars on each side)
+  const pivotHighs = [], pivotLows = [];
+  for (let i = zigLen; i < candles.length - zigLen; i++) {
+    let isHi = true, isLo = true;
+    for (let k = i - zigLen; k <= i + zigLen; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) isHi = false;
+      if (candles[k].low  <= candles[i].low)  isLo = false;
+    }
+    if (isHi) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLo)  pivotLows.push({ idx: i, price: candles[i].low  });
+  }
+
+  const recentHighs = []; // last 2 confirmed pivot highs [older, newer]
+  const recentLows  = []; // last 2 confirmed pivot lows  [older, newer]
+  let phPtr = 0, plPtr = 0;
+  let market = 0; // 1=bullish structure, -1=bearish, 0=undefined
+  let bullOB = null; // { obHigh, obLow } — retest → long
+  let bearOB = null; // { obHigh, obLow } — retest → short
+  let position = null;
+
+  const warmup = zigLen * 2 + 14 + 5;
+
+  for (let i = warmup; i < candles.length; i++) {
+    // Absorb any pivots now confirmed (pivot at idx confirmed when i >= idx + zigLen)
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + zigLen) {
+      recentHighs.push(pivotHighs[phPtr++]);
+      if (recentHighs.length > 2) recentHighs.shift();
+    }
+    while (plPtr < pivotLows.length && i >= pivotLows[plPtr].idx + zigLen) {
+      recentLows.push(pivotLows[plPtr++]);
+      if (recentLows.length > 2) recentLows.shift();
+    }
+
+    const bar = candles[i];
+
+    // ── Exit management ──
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+        bullOB    = null;
+        bearOB    = null;
+      }
+    }
+
+    // ── MSB detection ──
+    if (recentHighs.length >= 2 && recentLows.length >= 2) {
+      const h0 = recentHighs[recentHighs.length - 1];
+      const h1 = recentHighs[recentHighs.length - 2];
+      const l0 = recentLows[recentLows.length - 1];
+      const l1 = recentLows[recentLows.length - 2];
+
+      // Bullish MSB: new high significantly above previous high (from bearish/flat structure)
+      if (market <= 0 && h0.price > h1.price &&
+          h0.price > h1.price + Math.abs(h1.price - l0.price) * fibFact) {
+        market = 1;
+        // Bu-OB: last bearish candle (open>close) in the corrective leg from h1→l0
+        const s = Math.min(h1.idx, l0.idx), e = Math.max(h1.idx, l0.idx);
+        let obIdx = -1;
+        for (let k = s; k <= e; k++) { if (candles[k].open > candles[k].close) obIdx = k; }
+        if (obIdx >= 0) bullOB = { obHigh: candles[obIdx].high, obLow: candles[obIdx].low };
+        bearOB = null;
+      }
+      // Bearish MSB: new low significantly below previous low
+      else if (market >= 0 && l0.price < l1.price &&
+               l0.price < l1.price - Math.abs(h0.price - l1.price) * fibFact) {
+        market = -1;
+        // Be-OB: last bullish candle (open<close) in the rally from l1→h0
+        const s = Math.min(l1.idx, h0.idx), e = Math.max(l1.idx, h0.idx);
+        let obIdx = -1;
+        for (let k = s; k <= e; k++) { if (candles[k].open < candles[k].close) obIdx = k; }
+        if (obIdx >= 0) bearOB = { obHigh: candles[obIdx].high, obLow: candles[obIdx].low };
+        bullOB = null;
+      }
+    }
+
+    // ── OB invalidation on close beyond zone ──
+    if (bullOB && bar.close < bullOB.obLow) bullOB = null;
+    if (bearOB && bar.close > bearOB.obHigh) bearOB = null;
+
+    // ── Entry on OB retest ──
+    if (!position) {
+      const atr = calcATR(i);
+      if (bullOB && bar.close >= bullOB.obLow && bar.close <= bullOB.obHigh) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+        bullOB = null;
+      } else if (bearOB && bar.close >= bearOB.obLow && bar.close <= bearOB.obHigh) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+        bearOB = null;
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
   if (bot.strategy === 'b5s') return runB5SStrategy(candles, bot);
@@ -2738,6 +2900,7 @@ function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'cv1') return runCV1Strategy(candles, bot);
   if (bot.strategy === 'ch1') return runCH1Strategy(candles, bot);
   if (bot.strategy === 'pm1') return runPM1Strategy(candles, bot);
+  if (bot.strategy === 'ob1') return runOB1Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -3725,7 +3888,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isAI2 = bot.strategy === 'ai2';
   const isAI3 = bot.strategy === 'ai3';
   const isAI  = isAI1 || isAI2 || isAI3;
-  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1';
+  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1';
 
   const atrThLabel =
     isAI1              ? 'RSI'
@@ -3739,6 +3902,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     : bot.strategy === 'cv1' ? 'CVD Win'
     : bot.strategy === 'ch1' ? 'Swing'
     : bot.strategy === 'pm1' ? 'RSI Pd'
+    : bot.strategy === 'ob1' ? 'ZigLen'
     : 'Th';
 
   container.innerHTML = candidates
@@ -4329,8 +4493,8 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
-    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1'].includes(bot.strategy);
-    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : 'Th';
+    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1'].includes(bot.strategy);
+    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : 'Th';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
       : isATRBest
