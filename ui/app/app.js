@@ -341,6 +341,21 @@ const state = {
       sl: 1.4,       // ATR factor for SL/dist sizing
       threshold: 14, // SuperTrend ATR period
     },
+    {
+      id: 'sb1-sol-2h',
+      name: 'SB1 / Smart BOS Flip',
+      symbol: 'SOLUSDT',
+      timeframe: '2h',
+      strategy: 'sb1',
+      webhookKey: 'SB1_SOL',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.0,       // dist multiplier for TP (dist = breakout-leg range / 3)
+      sl: 1.0,       // dist multiplier for SL
+      threshold: 25, // swing pivot window (bars each side)
+    },
   ],
   scenarios: [
     {
@@ -3202,6 +3217,143 @@ function runSM1Strategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+function runSB1Strategy(candles, bot) {
+  const swingSize = Math.max(3, Math.round(Number(bot.threshold || 25)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.0));
+  const markers   = [];
+  const tradeLog  = [];
+  let openTrade   = null;
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Pre-compute confirmed pivot highs/lows
+  const pivotHighs = [], pivotLows = [];
+  for (let i = swingSize; i < candles.length - swingSize; i++) {
+    let isHi = true, isLo = true;
+    for (let k = i - swingSize; k <= i + swingSize; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) isHi = false;
+      if (candles[k].low  <= candles[i].low)  isLo = false;
+    }
+    if (isHi) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLo)  pivotLows.push({ idx: i, price: candles[i].low  });
+  }
+
+  let prevHigh = null, prevLow = null;
+  let prevHighActive = false, prevLowActive = false;
+  let prevHighIdx = 0, prevLowIdx = 0;
+  let phPtr = 0, plPtr = 0;
+  let position = null;
+  const warmup = swingSize * 2 + 14;
+
+  for (let i = warmup; i < candles.length; i++) {
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + swingSize) {
+      prevHigh = pivotHighs[phPtr].price;
+      prevHighIdx = pivotHighs[phPtr].idx;
+      prevHighActive = true;
+      phPtr++;
+    }
+    while (plPtr < pivotLows.length && i >= pivotLows[plPtr].idx + swingSize) {
+      prevLow = pivotLows[plPtr].price;
+      prevLowIdx = pivotLows[plPtr].idx;
+      prevLowActive = true;
+      plPtr++;
+    }
+
+    const bar = candles[i];
+    const highSrc = bar.close; // Candle Close confirmation
+
+    // Detect BOS events this bar
+    let highBroken = false, lowBroken = false;
+    if (prevHighActive && prevHigh !== null && highSrc > prevHigh) {
+      highBroken = true;
+      prevHighActive = false;
+    }
+    if (prevLowActive && prevLow !== null && highSrc < prevLow) {
+      lowBroken = true;
+      prevLowActive = false;
+    }
+
+    // ── Flip exit: opposite BOS closes the active position ──
+    if (position && highBroken && position.dir === 'short') {
+      const pl = ((position.entry - bar.close) / position.entry) * 100;
+      tradeLog.push({ ...position, exit: bar.close, pl, reason: 'flip', exitTime: bar.time, exitIndex: i });
+      markers.push({ time: bar.time, position: 'aboveBar', color: '#f0a500', shape: 'square', text: 'FX', size: 0.5 });
+      openTrade = null;
+      position  = null;
+    }
+    if (position && lowBroken && position.dir === 'long') {
+      const pl = ((bar.close - position.entry) / position.entry) * 100;
+      tradeLog.push({ ...position, exit: bar.close, pl, reason: 'flip', exitTime: bar.time, exitIndex: i });
+      markers.push({ time: bar.time, position: 'aboveBar', color: '#f0a500', shape: 'square', text: 'FX', size: 0.5 });
+      openTrade = null;
+      position  = null;
+    }
+
+    // ── TP / SL exit ──
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+      }
+    }
+
+    // ── New entry: at prevHigh/prevLow (the broken level) ──
+    if (!position) {
+      if (highBroken && prevHigh !== null) {
+        const atr = calcATR(i);
+        let legHigh = -Infinity, legLow = Infinity;
+        for (let k = prevHighIdx; k <= i; k++) {
+          if (candles[k].high > legHigh) legHigh = candles[k].high;
+          if (candles[k].low  < legLow)  legLow  = candles[k].low;
+        }
+        const dist  = Math.max(legHigh - legLow, atr) / 3;
+        const entry = prevHigh; // enter AT the broken level (limit-style)
+        position = { dir: 'long', entry, tp: entry + dist * tpMult, sl: entry - dist * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (lowBroken && prevLow !== null) {
+        const atr = calcATR(i);
+        let legHigh = -Infinity, legLow = Infinity;
+        for (let k = prevLowIdx; k <= i; k++) {
+          if (candles[k].high > legHigh) legHigh = candles[k].high;
+          if (candles[k].low  < legLow)  legLow  = candles[k].low;
+        }
+        const dist  = Math.max(legHigh - legLow, atr) / 3;
+        const entry = prevLow;
+        position = { dir: 'short', entry, tp: entry - dist * tpMult, sl: entry + dist * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runST1Strategy(candles, bot) {
   const stPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
   const stFactor = 3.0;
@@ -3449,6 +3601,7 @@ function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'sm1') return runSM1Strategy(candles, bot);
   if (bot.strategy === 'mn1') return runMN1Strategy(candles, bot);
   if (bot.strategy === 'st1') return runST1Strategy(candles, bot);
+  if (bot.strategy === 'sb1') return runSB1Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -4436,7 +4589,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isAI2 = bot.strategy === 'ai2';
   const isAI3 = bot.strategy === 'ai3';
   const isAI  = isAI1 || isAI2 || isAI3;
-  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1' || bot.strategy === 'fg1' || bot.strategy === 'sm1' || bot.strategy === 'mn1' || bot.strategy === 'st1';
+  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1' || bot.strategy === 'fg1' || bot.strategy === 'sm1' || bot.strategy === 'mn1' || bot.strategy === 'st1' || bot.strategy === 'sb1';
 
   const atrThLabel =
     isAI1              ? 'RSI'
@@ -4455,6 +4608,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     : bot.strategy === 'sm1' ? 'Swing'
     : bot.strategy === 'mn1' ? 'Swing'
     : bot.strategy === 'st1' ? 'ST Pd'
+    : bot.strategy === 'sb1' ? 'Swing'
     : 'Th';
 
   container.innerHTML = candidates
@@ -5045,8 +5199,8 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
-    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1','fg1','sm1','mn1','st1'].includes(bot.strategy);
-    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : bot.strategy === 'fg1' ? 'CVD Len' : bot.strategy === 'sm1' ? 'Swing' : bot.strategy === 'mn1' ? 'Swing' : bot.strategy === 'st1' ? 'ST Pd' : 'Th';
+    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1','fg1','sm1','mn1','st1','sb1'].includes(bot.strategy);
+    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : bot.strategy === 'fg1' ? 'CVD Len' : bot.strategy === 'sm1' ? 'Swing' : bot.strategy === 'mn1' ? 'Swing' : bot.strategy === 'st1' ? 'ST Pd' : bot.strategy === 'sb1' ? 'Swing' : 'Th';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
       : isATRBest

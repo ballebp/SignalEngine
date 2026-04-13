@@ -1298,6 +1298,105 @@ function runSM1(candles, bot) {
   return signals;
 }
 
+function runSB1(candles, bot) {
+  const swingSize = Math.max(3, Math.round(Number(bot.threshold || 25)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.0));
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const pivotHighs = [], pivotLows = [];
+  for (let i = swingSize; i < candles.length - swingSize; i++) {
+    let isHi = true, isLo = true;
+    for (let k = i - swingSize; k <= i + swingSize; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) isHi = false;
+      if (candles[k].low  <= candles[i].low)  isLo = false;
+    }
+    if (isHi) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLo)  pivotLows.push({ idx: i, price: candles[i].low  });
+  }
+
+  const signals = [];
+  let prevHigh = null, prevLow = null;
+  let prevHighActive = false, prevLowActive = false;
+  let prevHighIdx = 0, prevLowIdx = 0;
+  let phPtr = 0, plPtr = 0, position = null;
+  const warmup = swingSize * 2 + 14;
+
+  for (let i = warmup; i < candles.length; i++) {
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + swingSize) {
+      prevHigh = pivotHighs[phPtr].price;
+      prevHighIdx = pivotHighs[phPtr].idx;
+      prevHighActive = true;
+      phPtr++;
+    }
+    while (plPtr < pivotLows.length && i >= pivotLows[plPtr].idx + swingSize) {
+      prevLow = pivotLows[plPtr].price;
+      prevLowIdx = pivotLows[plPtr].idx;
+      prevLowActive = true;
+      plPtr++;
+    }
+    const bar = candles[i];
+    const highSrc = bar.close;
+    let highBroken = false, lowBroken = false;
+    if (prevHighActive && prevHigh !== null && highSrc > prevHigh) { highBroken = true; prevHighActive = false; }
+    if (prevLowActive  && prevLow  !== null && highSrc < prevLow)  { lowBroken  = true; prevLowActive  = false; }
+
+    // Flip exit
+    if (position && highBroken && position.dir === 'short') {
+      signals.push({ time: bar.time, event: 'EXIT_ALL', dir: 'short', kind: 'exit' });
+      position = null;
+    }
+    if (position && lowBroken && position.dir === 'long') {
+      signals.push({ time: bar.time, event: 'EXIT_ALL', dir: 'long', kind: 'exit' });
+      position = null;
+    }
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' });
+        position = null;
+      }
+    }
+
+    if (!position) {
+      if (highBroken && prevHigh !== null) {
+        const atr = calcATR(i);
+        let legHigh = -Infinity, legLow = Infinity;
+        for (let k = prevHighIdx; k <= i; k++) {
+          if (candles[k].high > legHigh) legHigh = candles[k].high;
+          if (candles[k].low  < legLow)  legLow  = candles[k].low;
+        }
+        const dist = Math.max(legHigh - legLow, atr) / 3;
+        position = { dir: 'long',  tp: prevHigh + dist * tpMult, sl: prevHigh - dist * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG',  dir: 'long',  kind: 'entry' });
+      } else if (lowBroken && prevLow !== null) {
+        const atr = calcATR(i);
+        let legHigh = -Infinity, legLow = Infinity;
+        for (let k = prevLowIdx; k <= i; k++) {
+          if (candles[k].high > legHigh) legHigh = candles[k].high;
+          if (candles[k].low  < legLow)  legLow  = candles[k].low;
+        }
+        const dist = Math.max(legHigh - legLow, atr) / 3;
+        position = { dir: 'short', tp: prevLow - dist * tpMult, sl: prevLow + dist * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 function runST1(candles, bot) {
   const stPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
   const stFactor = 3.0;
@@ -1581,6 +1680,7 @@ export default async function handler(req, res) {
         else if (strategy === 'sm1')  signals = runSM1(candles, bot);
         else if (strategy === 'mn1')  signals = runMN1(candles, bot);
         else if (strategy === 'st1')  signals = runST1(candles, bot);
+        else if (strategy === 'sb1')  signals = runSB1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired
