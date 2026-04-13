@@ -2966,6 +2966,8 @@ function botToRow(bot) {
       tp: bot.tp, sl: bot.sl, threshold: bot.threshold,
       source1: bot.source1, source2: bot.source2,
       source3: bot.source3, source4: bot.source4,
+      bosConfType: bot.bosConfType, tpType: bot.tpType,
+      slippage: bot.slippage, maxTrades: bot.maxTrades,
       autoSignal: !!bot.autoSignal,
       winRate: bot.winRate, netPl: bot.netPl, drawdown: bot.drawdown, trades: bot.trades,
     },
@@ -2977,8 +2979,9 @@ function applyBotRow(row) {
   if (!bot || !row.config) return;
   const editable = ['name', 'symbol', 'timeframe', 'webhookKey', 'tradeRelayUrl',
     'tradeRelayWebhookCode', 'tp', 'sl', 'threshold',
-    'source1', 'source2', 'source3', 'source4', 'autoSignal',
-    'winRate', 'netPl', 'drawdown', 'trades'];
+    'source1', 'source2', 'source3', 'source4',
+    'bosConfType', 'tpType', 'slippage', 'maxTrades',
+    'autoSignal', 'winRate', 'netPl', 'drawdown', 'trades'];
   editable.forEach((key) => { if (row.config[key] !== undefined) bot[key] = row.config[key]; });
 }
 
