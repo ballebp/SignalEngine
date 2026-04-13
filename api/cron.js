@@ -327,6 +327,221 @@ function runB5S(candles, bot) {
   return signals;
 }
 
+// ── AI1 Strategy — EMA(8/21) Cross + RSI Momentum ────────────────────────────
+
+function runAI1(candles, bot) {
+  const rsiPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.2));
+
+  function calcEma(data, period) {
+    const k = 2 / (period + 1);
+    let prev = NaN;
+    return data.map(v => { prev = isNaN(prev) ? v : v * k + prev * (1 - k); return prev; });
+  }
+
+  function calcRsi(data, period) {
+    const result = new Array(data.length).fill(NaN);
+    if (data.length < period + 1) return result;
+    let ag = 0, al = 0;
+    for (let i = 1; i <= period; i++) {
+      const d = data[i] - data[i - 1];
+      if (d > 0) ag += d; else al -= d;
+    }
+    ag /= period; al /= period;
+    result[period] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+    for (let i = period + 1; i < data.length; i++) {
+      const d = data[i] - data[i - 1];
+      ag = (ag * (period - 1) + Math.max(0, d))  / period;
+      al = (al * (period - 1) + Math.max(0, -d)) / period;
+      result[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+    }
+    return result;
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], prev = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close)); n++;
+    }
+    return n > 0 ? sum / n : candles[i].close * 0.015;
+  }
+
+  const closes = candles.map(c => c.close);
+  const emaF = calcEma(closes, 8);
+  const emaS = calcEma(closes, 21);
+  const rsi  = calcRsi(closes, rsiPeriod);
+  const warmup = 21 + rsiPeriod + 2;
+  const signals = [];
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position && !isNaN(rsi[i]) && !isNaN(emaF[i - 1])) {
+      const crossUp   = emaF[i - 1] <= emaS[i - 1] && emaF[i] > emaS[i];
+      const crossDown = emaF[i - 1] >= emaS[i - 1] && emaF[i] < emaS[i];
+      const atr = atrAt(i);
+      if (crossUp && rsi[i] >= 45 && rsi[i] <= 72) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (crossDown && rsi[i] >= 28 && rsi[i] <= 55) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
+// ── AI2 Strategy — Bollinger Band Squeeze Breakout ────────────────────────────
+
+function runAI2(candles, bot) {
+  const squeezePct = Math.max(5, Math.min(50, Number(bot.threshold || 25)));
+  const tpMult     = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult     = Math.max(0.3, Number(bot.sl || 1.0));
+  const bbP = 20, bbSd = 2.0;
+
+  function calcBB(idx) {
+    if (idx < bbP - 1) return null;
+    let sum = 0;
+    for (let j = idx - bbP + 1; j <= idx; j++) sum += candles[j].close;
+    const mean = sum / bbP;
+    let v = 0;
+    for (let j = idx - bbP + 1; j <= idx; j++) v += (candles[j].close - mean) ** 2;
+    const sd = Math.sqrt(v / bbP);
+    return { upper: mean + bbSd * sd, lower: mean - bbSd * sd, bw: mean > 0 ? sd * 2 * bbSd / mean : 0 };
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], prev = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close)); n++;
+    }
+    return n > 0 ? sum / n : candles[i].close * 0.015;
+  }
+
+  const bwHistory = [];
+  const signals = [];
+  let position = null;
+
+  for (let i = 0; i < candles.length; i++) {
+    const bar = candles[i];
+    const bb  = calcBB(i);
+    if (!bb) continue;
+    bwHistory.push(bb.bw);
+    if (bwHistory.length > 100) bwHistory.shift();
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+
+    if (!position && bwHistory.length >= 30) {
+      const bwRank = percentileRank(bwHistory, bb.bw);
+      if (bwRank <= squeezePct) {
+        const atr = atrAt(i);
+        const barRange = bar.high - bar.low;
+        if (bar.close > bb.upper && barRange > atr * 0.6) {
+          position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+          signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+        } else if (bar.close < bb.lower && barRange > atr * 0.6) {
+          position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+          signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+        }
+      }
+    }
+  }
+  return signals;
+}
+
+// ── AI3 Strategy — MACD + Stochastic + SMA(200) Triple Confluence ─────────────
+
+function runAI3(candles, bot) {
+  const stochKP = Math.max(3, Math.round(Number(bot.threshold || 14)));
+  const tpMult  = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult  = Math.max(0.3, Number(bot.sl || 1.5));
+
+  function calcEma(data, period) {
+    const k = 2 / (period + 1); let prev = NaN;
+    return data.map(v => { prev = isNaN(prev) ? v : v * k + prev * (1 - k); return prev; });
+  }
+
+  function calcSma(data, period) {
+    const result = new Array(data.length).fill(NaN); let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      sum += data[i];
+      if (i >= period) sum -= data[i - period];
+      if (i >= period - 1) result[i] = sum / period;
+    }
+    return result;
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], prev = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close)); n++;
+    }
+    return n > 0 ? sum / n : candles[i].close * 0.015;
+  }
+
+  const closes = candles.map(c => c.close);
+  const ema12  = calcEma(closes, 12);
+  const ema26  = calcEma(closes, 26);
+  const macdLn = ema12.map((v, i) => isNaN(v) || isNaN(ema26[i]) ? NaN : v - ema26[i]);
+  const sigLn  = calcEma(macdLn.map(v => isNaN(v) ? 0 : v), 9);
+  const hist   = macdLn.map((v, i) => isNaN(v) || isNaN(sigLn[i]) ? NaN : v - sigLn[i]);
+
+  const stochKRaw = new Array(candles.length).fill(NaN);
+  for (let i = stochKP - 1; i < candles.length; i++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let j = i - stochKP + 1; j <= i; j++) { if (candles[j].low < lo) lo = candles[j].low; if (candles[j].high > hi) hi = candles[j].high; }
+    stochKRaw[i] = hi > lo ? (candles[i].close - lo) / (hi - lo) * 100 : 50;
+  }
+  const stochK = calcSma(stochKRaw.map(v => isNaN(v) ? 50 : v), 3);
+  const stochD = calcSma(stochK.map(v => isNaN(v) ? 50 : v), 3);
+  const sma200 = calcSma(closes, 200);
+  const warmup = 200 + 26 + 9 + stochKP + 10;
+  const signals = [];
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position && !isNaN(sma200[i]) && !isNaN(hist[i]) && !isNaN(hist[i - 1])) {
+      const aboveSma = bar.close > sma200[i];
+      const histBull = hist[i - 1] < 0 && hist[i] >= 0;
+      const histBear = hist[i - 1] > 0 && hist[i] <= 0;
+      const sovrSold  = stochK[i] < 30 && stochK[i] > stochD[i];
+      const sovrBght  = stochK[i] > 70 && stochK[i] < stochD[i];
+      const atr = atrAt(i);
+      if (aboveSma && histBull && sovrSold) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (!aboveSma && histBear && sovrBght) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 // ── Signal code builder ───────────────────────────────────────────────────────
 
 function signalCode(bot, event) {
@@ -429,9 +644,12 @@ export default async function handler(req, res) {
         // Run strategy
         const strategy = bot.strategy || 'ad1';
         let signals = [];
-        if (strategy === 'h9s')     signals = runH9S(candles, bot);
-        else if (strategy === 'b5s') signals = runB5S(candles, bot);
-        else                         signals = runAD1(candles, bot);
+        if (strategy === 'h9s')       signals = runH9S(candles, bot);
+        else if (strategy === 'b5s')  signals = runB5S(candles, bot);
+        else if (strategy === 'ai1')  signals = runAI1(candles, bot);
+        else if (strategy === 'ai2')  signals = runAI2(candles, bot);
+        else if (strategy === 'ai3')  signals = runAI3(candles, bot);
+        else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired
         const newSignals = signals.filter(s => s.kind === 'entry' && s.time > lastFired);

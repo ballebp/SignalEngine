@@ -90,6 +90,61 @@ const state = {
       sl: 1.0,
       threshold: 25,
     },
+    // ── AI-native strategies ─────────────────────────────────────────────────
+    {
+      id: 'ai1-eth-1h',
+      name: 'AI1 / EMA+RSI Trend',
+      symbol: 'ETHUSDT',
+      timeframe: '1h',
+      strategy: 'ai1',
+      webhookKey: 'AI1_ETH',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0,
+      netPl: 0,
+      drawdown: 0,
+      trades: 0,
+      tp: 2.5,      // ATR multiplier for take-profit (2.5 × ATR)
+      sl: 1.2,      // ATR multiplier for stop-loss  (1.2 × ATR  → ~2:1 R/R)
+      threshold: 14, // RSI lookback period
+    },
+    {
+      id: 'ai2-sol-15m',
+      name: 'AI2 / BB Squeeze Breakout',
+      symbol: 'SOLUSDT',
+      timeframe: '15m',
+      strategy: 'ai2',
+      webhookKey: 'AI2_SOL',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0,
+      netPl: 0,
+      drawdown: 0,
+      trades: 0,
+      tp: 2.0,      // ATR multiplier for take-profit
+      sl: 1.0,      // ATR multiplier for stop-loss
+      threshold: 25, // squeeze percentile — fires when BB bandwidth < this percentile
+    },
+    {
+      id: 'ai3-btc-4h',
+      name: 'AI3 / MACD+Stoch Confluence',
+      symbol: 'BTCUSDT',
+      timeframe: '4h',
+      strategy: 'ai3',
+      webhookKey: 'AI3_BTC',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0,
+      netPl: 0,
+      drawdown: 0,
+      trades: 0,
+      tp: 2.5,      // ATR multiplier for take-profit
+      sl: 1.5,      // ATR multiplier for stop-loss
+      threshold: 14, // Stochastic K lookback period
+    },
   ],
   scenarios: [
     {
@@ -1459,9 +1514,335 @@ function runB5SStrategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+// ── AI1 Strategy — EMA Crossover + RSI Momentum ───────────────────────────────
+// EMA(8)/EMA(21) cross filtered by RSI(14) momentum window.
+// Long: fast crosses above slow while RSI 45-72 (momentum rising, not overbought).
+// Short: fast crosses below slow while RSI 28-55 (momentum falling, not oversold).
+// Exits via ATR-based dynamic TP (tp × ATR) and SL (sl × ATR) for ~2:1 R/R.
+function runAI1Strategy(candles, bot) {
+  const markers = [];
+  const tradeLog = [];
+  let openTrade = null;
+
+  const rsiPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.2));
+  const emaFastP  = 8;
+  const emaSlowP  = 21;
+
+  function calcEma(data, period) {
+    const k = 2 / (period + 1);
+    const result = new Array(data.length).fill(NaN);
+    let prev = NaN;
+    for (let i = 0; i < data.length; i++) {
+      prev = isNaN(prev) ? data[i] : data[i] * k + prev * (1 - k);
+      result[i] = prev;
+    }
+    return result;
+  }
+
+  function calcRsi(data, period) {
+    const result = new Array(data.length).fill(NaN);
+    if (data.length < period + 1) return result;
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 1; i <= period; i++) {
+      const d = data[i] - data[i - 1];
+      if (d > 0) avgGain += d; else avgLoss -= d;
+    }
+    avgGain /= period; avgLoss /= period;
+    result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    for (let i = period + 1; i < data.length; i++) {
+      const d = data[i] - data[i - 1];
+      avgGain = (avgGain * (period - 1) + Math.max(0, d))  / period;
+      avgLoss = (avgLoss * (period - 1) + Math.max(0, -d)) / period;
+      result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    }
+    return result;
+  }
+
+  function atrAt(idx) {
+    const period = 14;
+    if (idx < 1) return candles[idx].close * 0.015;
+    let sum = 0, count = 0;
+    for (let j = Math.max(1, idx - period + 1); j <= idx; j++) {
+      const c = candles[j], p = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+      count++;
+    }
+    return count > 0 ? sum / count : candles[idx].close * 0.015;
+  }
+
+  const closes = candles.map(c => c.close);
+  const emaF = calcEma(closes, emaFastP);
+  const emaS = calcEma(closes, emaSlowP);
+  const rsi  = calcRsi(closes, rsiPeriod);
+  const warmup = emaSlowP + rsiPeriod + 2;
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason = hitTP ? 'tp' : 'sl';
+        const exitPx = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position && !isNaN(rsi[i]) && !isNaN(emaF[i - 1]) && !isNaN(emaS[i - 1])) {
+      const crossUp   = emaF[i - 1] <= emaS[i - 1] && emaF[i] > emaS[i];
+      const crossDown = emaF[i - 1] >= emaS[i - 1] && emaF[i] < emaS[i];
+      const atr = atrAt(i);
+      if (crossUp && rsi[i] >= 45 && rsi[i] <= 72) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (crossDown && rsi[i] >= 28 && rsi[i] <= 55) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── AI2 Strategy — Bollinger Band Squeeze Breakout ────────────────────────────
+// Detects low-volatility compression via Bollinger Band bandwidth percentile.
+// When bandwidth < squeezePct-th percentile (tight coil), fires on direction of
+// the breakout candle (close outside the bands) confirmed by a strong bar body.
+// ATR-based dynamic exits keep R/R adaptive to current volatility.
+function runAI2Strategy(candles, bot) {
+  const markers = [];
+  const tradeLog = [];
+  let openTrade = null;
+
+  const bbPeriod    = 20;
+  const bbStdDev    = 2.0;
+  const squeezePct  = Math.max(5, Math.min(50, Number(bot.threshold || 25)));
+  const tpMult      = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult      = Math.max(0.3, Number(bot.sl || 1.0));
+
+  function calcBB(idx) {
+    if (idx < bbPeriod - 1) return null;
+    let sum = 0;
+    for (let j = idx - bbPeriod + 1; j <= idx; j++) sum += candles[j].close;
+    const mean = sum / bbPeriod;
+    let varSum = 0;
+    for (let j = idx - bbPeriod + 1; j <= idx; j++) varSum += (candles[j].close - mean) ** 2;
+    const sd = Math.sqrt(varSum / bbPeriod);
+    return { upper: mean + bbStdDev * sd, lower: mean - bbStdDev * sd, mean, bw: mean > 0 ? (sd * 2 * bbStdDev) / mean : 0 };
+  }
+
+  function atrAt(idx) {
+    const period = 14;
+    if (idx < 1) return candles[idx].close * 0.015;
+    let sum = 0, count = 0;
+    for (let j = Math.max(1, idx - period + 1); j <= idx; j++) {
+      const c = candles[j], p = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+      count++;
+    }
+    return count > 0 ? sum / count : candles[idx].close * 0.015;
+  }
+
+  const bwHistory = [];
+  let position = null;
+
+  for (let i = 0; i < candles.length; i++) {
+    const bar = candles[i];
+    const bb  = calcBB(i);
+    if (!bb) continue;
+
+    bwHistory.push(bb.bw);
+    if (bwHistory.length > 100) bwHistory.shift();
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason = hitTP ? 'tp' : 'sl';
+        const exitPx = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position && bwHistory.length >= 30) {
+      const bwRank = percentileRank(bwHistory, bb.bw);
+      const inSqueeze = bwRank <= squeezePct;
+      if (inSqueeze) {
+        const atr = atrAt(i);
+        const barRange = bar.high - bar.low;
+        if (bar.close > bb.upper && barRange > atr * 0.6) {
+          const entry = bar.close;
+          position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+          markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+        } else if (bar.close < bb.lower && barRange > atr * 0.6) {
+          const entry = bar.close;
+          position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+          markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+        }
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── AI3 Strategy — MACD + Stochastic + SMA(200) Triple Confluence ────────────
+// Only trades in the direction of the 200-bar SMA macro trend.
+// Entry trigger: MACD histogram sign flip (momentum shift confirmation)
+//   AND Stochastic K/D indicating reversal from extreme zone (< 30 or > 70).
+// This triple-filter design produces fewer but much higher-conviction signals.
+function runAI3Strategy(candles, bot) {
+  const markers = [];
+  const tradeLog = [];
+  let openTrade = null;
+
+  const stochKPeriod = Math.max(3, Math.round(Number(bot.threshold || 14)));
+  const tpMult       = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult       = Math.max(0.3, Number(bot.sl || 1.5));
+  const smaPeriod    = 200;
+
+  function calcEma(data, period) {
+    const k = 2 / (period + 1);
+    const result = new Array(data.length).fill(NaN);
+    let prev = NaN;
+    for (let i = 0; i < data.length; i++) {
+      prev = isNaN(prev) ? data[i] : data[i] * k + prev * (1 - k);
+      result[i] = prev;
+    }
+    return result;
+  }
+
+  function calcSma(data, period) {
+    const result = new Array(data.length).fill(NaN);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      sum += data[i];
+      if (i >= period) sum -= data[i - period];
+      if (i >= period - 1) result[i] = sum / period;
+    }
+    return result;
+  }
+
+  function atrAt(idx) {
+    const period = 14;
+    if (idx < 1) return candles[idx].close * 0.015;
+    let sum = 0, count = 0;
+    for (let j = Math.max(1, idx - period + 1); j <= idx; j++) {
+      const c = candles[j], p = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+      count++;
+    }
+    return count > 0 ? sum / count : candles[idx].close * 0.015;
+  }
+
+  const closes = candles.map(c => c.close);
+
+  // MACD(12,26,9)
+  const ema12     = calcEma(closes, 12);
+  const ema26     = calcEma(closes, 26);
+  const macdLine  = ema12.map((v, i) => isNaN(v) || isNaN(ema26[i]) ? NaN : v - ema26[i]);
+  const sigLine   = calcEma(macdLine.map(v => isNaN(v) ? 0 : v), 9);
+  const histogram = macdLine.map((v, i) => isNaN(v) || isNaN(sigLine[i]) ? NaN : v - sigLine[i]);
+
+  // Stochastic K(stochKPeriod, 3, 3) with smoothing
+  const stochKRaw = new Array(candles.length).fill(NaN);
+  for (let i = stochKPeriod - 1; i < candles.length; i++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let j = i - stochKPeriod + 1; j <= i; j++) {
+      if (candles[j].low  < lo) lo = candles[j].low;
+      if (candles[j].high > hi) hi = candles[j].high;
+    }
+    const range = hi - lo;
+    stochKRaw[i] = range > 0 ? (candles[i].close - lo) / range * 100 : 50;
+  }
+  const stochK = calcSma(stochKRaw.map(v => isNaN(v) ? 50 : v), 3);  // %K smoothed
+  const stochD = calcSma(stochK.map(v => isNaN(v) ? 50 : v), 3);     // %D signal line
+
+  // SMA(200)
+  const sma200 = calcSma(closes, smaPeriod);
+  const warmup = smaPeriod + 26 + 9 + stochKPeriod + 10;
+
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason = hitTP ? 'tp' : 'sl';
+        const exitPx = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position && !isNaN(sma200[i]) && !isNaN(histogram[i]) && !isNaN(histogram[i - 1])) {
+      const aboveSma      = bar.close > sma200[i];
+      const histFlipBull  = histogram[i - 1] < 0 && histogram[i] >= 0;  // MACD hist turns positive
+      const histFlipBear  = histogram[i - 1] > 0 && histogram[i] <= 0;  // MACD hist turns negative
+      const stochOversold  = stochK[i] < 30 && stochK[i] > stochD[i];   // K rising from oversold
+      const stochOverbought = stochK[i] > 70 && stochK[i] < stochD[i];   // K falling from overbought
+      const atr = atrAt(i);
+
+      if (aboveSma && histFlipBull && stochOversold) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (!aboveSma && histFlipBear && stochOverbought) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
   if (bot.strategy === 'b5s') return runB5SStrategy(candles, bot);
+  if (bot.strategy === 'ai1') return runAI1Strategy(candles, bot);
+  if (bot.strategy === 'ai2') return runAI2Strategy(candles, bot);
+  if (bot.strategy === 'ai3') return runAI3Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -2346,6 +2727,12 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isH9S = bot.strategy === 'h9s';
   const isB5S = bot.strategy === 'b5s';
   const isBOS = isH9S || isB5S;
+  const isAI1 = bot.strategy === 'ai1';
+  const isAI2 = bot.strategy === 'ai2';
+  const isAI3 = bot.strategy === 'ai3';
+  const isAI  = isAI1 || isAI2 || isAI3;
+
+  const aiThresholdLabel = isAI1 ? 'RSI' : isAI2 ? 'Squeeze%' : 'Stoch';
 
   container.innerHTML = candidates
     .slice(0, 6)
@@ -2355,6 +2742,8 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
         const tpPart = candidate.tpType === 'dynamic' ? 'Dyn TP' : `TP ${candidate.tp}% SL ${candidate.sl}%`;
         const tradesPart = isB5S ? ` • ${candidate.maxTrades ?? 3}T` : '';
         paramStr = `Swing ${candidate.threshold} • ${candidate.bosConfType === 'wicks' ? 'Wicks' : 'Close'} • ${tpPart}${tradesPart}`;
+      } else if (isAI) {
+        paramStr = `TP ${candidate.tp}× ATR • SL ${candidate.sl}× ATR • ${aiThresholdLabel} ${candidate.threshold}`;
       } else {
         paramStr = `TP ${candidate.tp}% • SL ${candidate.sl}% • Th ${candidate.threshold}`;
       }
@@ -2396,6 +2785,8 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       feedback.className = 'param-feedback good';
       const label = isBOS
         ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}${isB5S ? ` / ${candidate.maxTrades ?? 3}T` : ''}`
+        : isAI
+        ? `TP ${candidate.tp}× / SL ${candidate.sl}× / ${aiThresholdLabel} ${candidate.threshold}`
         : `TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}`;
       feedback.textContent = `Applied candidate #${idx + 1}: ${label}.`;
       applyParamsToChart(bot);
@@ -2702,6 +3093,51 @@ function setupChartParameterLab(bot) {
           }
         }
       }
+    } else if (bot.strategy === 'ai1') {
+      // EMA+RSI: optimize ATR-multiplier TP/SL and RSI period
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+      const slCandidates = [0.7, 0.9, 1.1, 1.4, 1.8, 2.2];
+      const thCandidates = [9, 11, 14, 18, 21]; // RSI period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'ai2') {
+      // BB Squeeze: optimize ATR-multiplier TP/SL and squeeze percentile
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 3.5];
+      const slCandidates = [0.6, 0.8, 1.0, 1.3, 1.7];
+      const thCandidates = [10, 15, 20, 25, 30, 40]; // squeeze percentile threshold
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'ai3') {
+      // MACD+Stoch: optimize ATR-multiplier TP/SL and Stochastic period
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
+      const slCandidates = [0.8, 1.0, 1.3, 1.7, 2.2];
+      const thCandidates = [9, 11, 14, 18, 21]; // Stochastic K period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
     } else {
       const tpCandidates = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.2, 3.0];
       const slCandidates = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 9.0, 12.0];
@@ -2782,8 +3218,12 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
+    const isAIBest  = bot.strategy === 'ai1' || bot.strategy === 'ai2' || bot.strategy === 'ai3';
+    const aiThLbl   = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : 'Stoch';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
+      : isAIBest
+      ? `TP ${best.tp}× / SL ${best.sl}× / ${aiThLbl} ${best.threshold}`
       : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
