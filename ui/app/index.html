@@ -263,14 +263,26 @@
 
         <div class="chart-wrapper">
           <div class="chart-binance-topbar">
-            <div class="chart-time-pills" id="chart-time-pills">
-              <button class="time-pill" data-tf="1m" type="button">1m</button>
-              <button class="time-pill" data-tf="5m" type="button">5m</button>
-              <button class="time-pill" data-tf="15m" type="button">15m</button>
-              <button class="time-pill" data-tf="1h" type="button">1H</button>
-              <button class="time-pill" data-tf="4h" type="button">4H</button>
-              <button class="time-pill" data-tf="1d" type="button">1D</button>
-              <button class="time-pill" data-tf="1w" type="button">1W</button>
+            <div class="chart-topbar-left">
+              <select id="chart-tf-select" class="chart-tf-select" title="Timeframe">
+                <option value="1m">1m</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="1h">1H</option>
+                <option value="4h">4H</option>
+                <option value="1d">1D</option>
+                <option value="1w">1W</option>
+              </select>
+              <details class="layers-dropdown" id="layers-dropdown">
+                <summary class="layers-summary">Layers &#9662;</summary>
+                <div class="layers-menu">
+                  <label><input id="toggle-candles" type="checkbox" checked> Candles</label>
+                  <label><input id="toggle-sma" type="checkbox" checked> SMA</label>
+                  <label><input id="toggle-volume" type="checkbox" checked> Volume</label>
+                  <label><input id="toggle-markers" type="checkbox" checked> Entries/Exits</label>
+                  <label><input id="toggle-levels" type="checkbox" checked> TP/SL Lines</label>
+                </div>
+              </details>
             </div>
             <div class="chart-top-metrics" id="chart-top-metrics"></div>
           </div>
@@ -283,14 +295,6 @@
               <button class="chart-left-btn" id="chart-follow-toggle" title="Follow Price">&#9678;</button>
               <button class="chart-left-btn" id="chart-reset-view" title="Reset View">&#8635;</button>
               <button class="chart-left-btn" id="chart-load-more"  title="Load More History">&#8617;</button>
-              <div class="chart-left-divider"></div>
-              <div class="replay-layer-toggles" id="replay-layer-toggles">
-                <label title="Candles"><input id="toggle-candles" type="checkbox" checked> Candles</label>
-                <label title="SMA"><input id="toggle-sma" type="checkbox" checked> SMA</label>
-                <label title="Volume"><input id="toggle-volume" type="checkbox" checked> Volume</label>
-                <label title="Entries/Exits"><input id="toggle-markers" type="checkbox" checked> Entries/Exits</label>
-                <label title="TP/SL Lines"><input id="toggle-levels" type="checkbox" checked> TP/SL Lines</label>
-              </div>
             </aside>
             <div class="chart-core-area">
               <div class="chart-ohlcv-legend" id="chart-ohlcv-legend"></div>

@@ -531,6 +531,8 @@ function renderConfigForm() {
         setupTimeframePills(currentBot);
         const chartTfSelect = document.getElementById('chart-param-timeframe');
         if (chartTfSelect) chartTfSelect.value = el.value;
+        const topbarTfSelect = document.getElementById('chart-tf-select');
+        if (topbarTfSelect) topbarTfSelect.value = el.value;
         void initChart(currentBot.id);
       }
     });
@@ -1853,29 +1855,25 @@ async function initChart(botId) {
 }
 
 function setupTimeframePills(bot) {
-  const pills = document.querySelectorAll('#chart-time-pills .time-pill');
-  if (!pills.length) return;
+  const sel = document.getElementById('chart-tf-select');
+  if (!sel) return;
   const currentTf = String(bot.timeframe || '5m').toLowerCase();
-  pills.forEach((pill) => {
-    pill.classList.toggle('is-active', pill.dataset.tf === currentTf);
-    pill.onclick = () => {
-      const tf = String(pill.dataset.tf || '').toLowerCase();
-      if (!tf) return;
-      // Always look up fresh bot so we never hold a stale closure reference
-      const activeBotId = chartState.currentBotId || state.selectedBotId;
-      const activeBot = state.bots.find((b) => b.id === activeBotId) || state.bots[0];
-      if (tf === String(activeBot.timeframe).toLowerCase()) return; // already this TF
-      activeBot.timeframe = tf;
-      // Sync the param-lab select
-      const timeframeInput = document.getElementById('chart-param-timeframe');
-      if (timeframeInput) timeframeInput.value = tf;
-      renderHero();
-      renderBots();
-      renderConfigForm();
-      renderConfigPreview();
-      void initChart(activeBot.id);
-    };
-  });
+  sel.value = currentTf;
+  sel.onchange = () => {
+    const tf = String(sel.value || '').toLowerCase();
+    if (!tf) return;
+    const activeBotId = chartState.currentBotId || state.selectedBotId;
+    const activeBot = state.bots.find((b) => b.id === activeBotId) || state.bots[0];
+    if (tf === String(activeBot.timeframe).toLowerCase()) return;
+    activeBot.timeframe = tf;
+    const timeframeInput = document.getElementById('chart-param-timeframe');
+    if (timeframeInput) timeframeInput.value = tf;
+    renderHero();
+    renderBots();
+    renderConfigForm();
+    renderConfigPreview();
+    void initChart(activeBot.id);
+  };
 }
 
 function renderChartControls(activeBot, summary) {

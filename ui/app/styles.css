@@ -943,27 +943,80 @@ body.is-compact .panel-header h3 {
   background: linear-gradient(180deg, rgba(18, 25, 38, 0.96), rgba(13, 22, 33, 0.96));
 }
 
-.chart-time-pills {
+.chart-topbar-left {
   display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.time-pill {
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  padding: 3px 7px;
+.chart-tf-select {
+  background: rgba(4, 11, 18, 0.92);
+  border: 1px solid var(--line);
   border-radius: 8px;
+  color: var(--text);
+  padding: 3px 7px;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.time-pill.is-active,
-.time-pill:hover {
-  background: rgba(39, 211, 197, 0.12);
-  border-color: rgba(39, 211, 197, 0.25);
+.layers-dropdown {
+  position: relative;
+}
+
+.layers-summary {
+  list-style: none;
+  background: rgba(4, 11, 18, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.layers-summary::-webkit-details-marker { display: none; }
+
+.layers-dropdown[open] .layers-summary {
+  border-color: rgba(39, 211, 197, 0.35);
   color: var(--text);
+}
+
+.layers-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 200;
+  background: rgba(8, 17, 28, 0.98);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 150px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+
+.layers-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.layers-menu label:hover {
+  background: rgba(39, 211, 197, 0.08);
+}
+
+.layers-menu input[type="checkbox"] {
+  accent-color: #27d3c5;
 }
 
 .chart-top-metrics {
@@ -992,35 +1045,15 @@ body.is-compact .panel-header h3 {
   background: rgba(12, 20, 30, 0.78);
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 6px;
   padding: 10px 5px;
   user-select: none;
 }
 
-.chart-left-divider {
-  height: 1px;
-  background: rgba(128, 156, 181, 0.14);
-  margin: 4px 0;
-}
-
-.chart-left-tools .replay-layer-toggles {
-  flex-direction: column;
-  gap: 4px;
-  flex-wrap: nowrap;
-}
-
-.chart-left-tools .replay-layer-toggles label {
-  padding: 5px 7px;
-  font-size: 11px;
-  border-radius: 7px;
-  white-space: nowrap;
-}
-
 .chart-left-btn {
   width: 30px;
   height: 30px;
-  align-self: center;
   border: 1px solid rgba(128, 156, 181, 0.18);
   border-radius: 7px;
   background: transparent;
