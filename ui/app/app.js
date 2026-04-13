@@ -69,6 +69,27 @@ const state = {
       source3: 'KRAKEN:BTCUSD',
       source4: 'BITSTAMP:BTCUSD',
     },
+    {
+      id: 'b5s-btc-15m',
+      name: 'B5S / B1',
+      symbol: 'BTCUSDT',
+      timeframe: '15m',
+      strategy: 'b5s',
+      tpType: 'dynamic',
+      bosConfType: 'close',
+      maxTrades: 3,
+      webhookKey: 'B5S_BTC',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0,
+      netPl: 0,
+      drawdown: 0,
+      trades: 0,
+      tp: 1.0,
+      sl: 1.0,
+      threshold: 25,
+    },
   ],
   scenarios: [
     {
@@ -437,6 +458,8 @@ async function renderSignalTable() {
 function renderConfigForm() {
   const bot = getSelectedBot();
   const isH9S = bot.strategy === 'h9s';
+  const isB5S = bot.strategy === 'b5s';
+  const isBOS = isH9S || isB5S;
   const fields = [
     ['name', 'Bot Name', bot.name],
     ['symbol', 'Symbol', bot.symbol],
@@ -446,13 +469,18 @@ function renderConfigForm() {
     ['tradeRelayWebhookCode', 'TradeRelay Webhook Code (step 1 from bot settings)', bot.tradeRelayWebhookCode || ''],
     ['tp', 'Take Profit %', bot.tp],
     ['sl', 'Stop Loss %', bot.sl],
-    ['threshold', isH9S ? 'Swing Size' : 'Threshold', bot.threshold],
-    ...(isH9S ? [
+    ['threshold', isBOS ? 'Swing Size' : 'Threshold', bot.threshold],
+    ...(isBOS ? [
       ['bosConfType', 'Confirm (Wicks / Close)', bot.bosConfType || 'close'],
       ['tpType', 'TP Type (dynamic / fixed)', bot.tpType || 'dynamic'],
+    ] : []),
+    ...(isH9S ? [
       ['slippage', 'Slippage %', bot.slippage ?? 0.05],
     ] : []),
-    ...(!isH9S ? [
+    ...(isB5S ? [
+      ['maxTrades', 'Max Concurrent Trades', bot.maxTrades ?? 3],
+    ] : []),
+    ...(!isBOS ? [
       ['source1', 'Source 1', bot.source1],
       ['source2', 'Source 2', bot.source2],
       ['source3', 'Source 3', bot.source3],
@@ -478,7 +506,7 @@ function renderConfigForm() {
   configForm.querySelectorAll('input, select').forEach((el) => {
     el.addEventListener('change', () => {
       const currentBot = getSelectedBot();
-      const parsedValue = ['tp', 'sl', 'threshold', 'slippage'].includes(el.name) ? Number(el.value || 0) : el.value;
+      const parsedValue = ['tp', 'sl', 'threshold', 'slippage', 'maxTrades'].includes(el.name) ? Number(el.value || 0) : el.value;
       currentBot[el.name] = parsedValue;
       renderConfigPreview();
       renderHero();
@@ -496,7 +524,7 @@ function renderConfigForm() {
     if (el.tagName !== 'SELECT') {
       el.addEventListener('input', () => {
         const currentBot = getSelectedBot();
-        const parsedValue = ['tp', 'sl', 'threshold', 'slippage'].includes(el.name) ? Number(el.value || 0) : el.value;
+        const parsedValue = ['tp', 'sl', 'threshold', 'slippage', 'maxTrades'].includes(el.name) ? Number(el.value || 0) : el.value;
         currentBot[el.name] = parsedValue;
         renderConfigPreview();
         renderHero();
@@ -524,6 +552,21 @@ function renderConfigPreview() {
       bosConfType: bot.bosConfType || 'close',
       tpType: bot.tpType || 'dynamic',
       slippage: Number(bot.slippage ?? 0.05),
+    };
+  } else if (bot.strategy === 'b5s') {
+    normalized = {
+      indicatorId: 'B5S',
+      botId: bot.id,
+      symbol: bot.symbol,
+      timeframe: bot.timeframe,
+      webhookKey: bot.webhookKey,
+      tradeRelayUrl: bot.tradeRelayUrl || '',
+      takeProfitPercent: Number(bot.tp),
+      stopLossPercent: Number(bot.sl),
+      swingSize: Number(bot.threshold),
+      bosConfType: bot.bosConfType || 'close',
+      tpType: bot.tpType || 'dynamic',
+      maxTrades: Number(bot.maxTrades ?? 3),
     };
   } else {
     normalized = {
@@ -1237,8 +1280,158 @@ function runH9SStrategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+function runB5SStrategy(candles, bot) {
+  const tpPct = Number(bot.tp) / 100;
+  const slPct = Number(bot.sl) / 100;
+  const swingSize = Math.max(2, Math.round(Number(bot.threshold) || 25));
+  const useDynamic = (bot.tpType || 'dynamic') === 'dynamic';
+  const useWicks = (bot.bosConfType || 'close') === 'wicks';
+  const maxTrades = Math.max(1, Math.min(10, Math.round(Number(bot.maxTrades) || 3)));
+
+  const markers = [];
+  const tradeLog = [];
+  let activeTrades = []; // { dir, entry, tp, sl, entryBar, entryTime }
+
+  let prevHigh = NaN, prevLow = NaN;
+  let prevHighIdx = -1, prevLowIdx = -1;
+  let highActive = false, lowActive = false;
+
+  // Separate pending state per direction
+  let pendingLong = false, pendingShort = false;
+  let pendingLongBar = -1, pendingShortBar = -1;
+  let pendingLongDist = NaN, pendingShortDist = NaN;
+
+  for (let i = 0; i < candles.length; i++) {
+    const bar = candles[i];
+
+    // Confirm pivot at (i - swingSize) once both sides visible
+    const pivIdx = i - swingSize;
+    if (pivIdx >= swingSize) {
+      const pivot = candles[pivIdx];
+      let isPivHigh = true, isPivLow = true;
+      for (let k = pivIdx - swingSize; k <= pivIdx + swingSize; k++) {
+        if (k === pivIdx) continue;
+        if (candles[k].high >= pivot.high) isPivHigh = false;
+        if (candles[k].low  <= pivot.low)  isPivLow  = false;
+      }
+      if (isPivHigh) { prevHigh = pivot.high; prevHighIdx = pivIdx; highActive = true; }
+      if (isPivLow)  { prevLow  = pivot.low;  prevLowIdx  = pivIdx; lowActive  = true; }
+    }
+
+    // BOS detection
+    const highSrc = useWicks ? bar.high : bar.close;
+    const lowSrc  = useWicks ? bar.low  : bar.close;
+
+    if (highSrc > prevHigh && highActive && !isNaN(prevHigh)) {
+      highActive = false;
+      const len = Math.max(1, Math.min(i - prevHighIdx, 100));
+      let hi = -Infinity, lo = Infinity;
+      for (let k = Math.max(0, i - len); k <= i; k++) {
+        if (candles[k].high > hi) hi = candles[k].high;
+        if (candles[k].low  < lo) lo = candles[k].low;
+      }
+      pendingLong = true;
+      pendingLongBar = i;
+      pendingLongDist = (hi - lo) / 2;
+      markers.push({ time: bar.time, position: 'belowBar', color: 'rgba(39,211,197,0.6)', shape: 'circle', text: 'BOS', size: 0.5 });
+    }
+
+    if (lowSrc < prevLow && lowActive && !isNaN(prevLow)) {
+      lowActive = false;
+      const len = Math.max(1, Math.min(i - prevLowIdx, 100));
+      let hi = -Infinity, lo = Infinity;
+      for (let k = Math.max(0, i - len); k <= i; k++) {
+        if (candles[k].high > hi) hi = candles[k].high;
+        if (candles[k].low  < lo) lo = candles[k].low;
+      }
+      pendingShort = true;
+      pendingShortBar = i;
+      pendingShortDist = (hi - lo) / 2;
+      markers.push({ time: bar.time, position: 'aboveBar', color: 'rgba(255,109,109,0.6)', shape: 'circle', text: 'BOS', size: 0.5 });
+    }
+
+    // Execute pending long on NEXT bar
+    if (pendingLong && i > pendingLongBar && activeTrades.length < maxTrades) {
+      const entry = bar.open;
+      const d = pendingLongDist;
+      const tp = useDynamic ? entry + d : entry * (1 + tpPct);
+      const sl = useDynamic ? entry - d : entry * (1 - slPct);
+      activeTrades.push({ dir: 'long', entry, tp, sl, entryBar: i, entryTime: bar.time });
+      markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      pendingLong = false;
+    }
+
+    // Execute pending short on NEXT bar
+    if (pendingShort && i > pendingShortBar && activeTrades.length < maxTrades) {
+      const entry = bar.open;
+      const d = pendingShortDist;
+      const tp = useDynamic ? entry - d : entry * (1 - tpPct);
+      const sl = useDynamic ? entry + d : entry * (1 + slPct);
+      activeTrades.push({ dir: 'short', entry, tp, sl, entryBar: i, entryTime: bar.time });
+      markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      pendingShort = false;
+    }
+
+    // Check TP/SL on all active trades
+    const remaining = [];
+    for (const trade of activeTrades) {
+      if (i <= trade.entryBar) { remaining.push(trade); continue; }
+      let hitTP = false, hitSL = false;
+      if (trade.dir === 'long') {
+        hitTP = bar.high >= trade.tp;
+        hitSL = bar.low  <= trade.sl;
+      } else {
+        hitTP = bar.low  <= trade.tp;
+        hitSL = bar.high >= trade.sl;
+      }
+      if (hitTP && hitSL) {
+        const dTP = Math.abs(bar.open - trade.tp);
+        const dSL = Math.abs(bar.open - trade.sl);
+        if (dTP <= dSL) hitSL = false; else hitTP = false;
+      }
+      if (hitTP || hitSL) {
+        const exitPx = hitTP ? trade.tp : trade.sl;
+        const pct = trade.dir === 'long'
+          ? (exitPx - trade.entry) / trade.entry * 100
+          : (trade.entry - exitPx) / trade.entry * 100;
+        tradeLog.push({
+          dir: trade.dir, entry: trade.entry, tp: trade.tp, sl: trade.sl,
+          exit: exitPx, pl: pct, reason: hitTP ? 'tp' : 'sl',
+          entryTime: trade.entryTime, exitTime: bar.time,
+          entryIndex: trade.entryBar, exitIndex: i,
+        });
+        markers.push({
+          time: bar.time,
+          position: trade.dir === 'long' ? 'aboveBar' : 'belowBar',
+          color: hitTP ? '#27d3c5' : '#f7bc52',
+          shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8,
+        });
+      } else {
+        remaining.push(trade);
+      }
+    }
+    activeTrades = remaining;
+  }
+
+  // Any still-open trades
+  let openTrade = null;
+  for (const trade of activeTrades) {
+    tradeLog.push({
+      dir: trade.dir, entry: trade.entry, tp: trade.tp, sl: trade.sl,
+      exit: null, pl: null, reason: 'open',
+      entryTime: trade.entryTime, exitTime: null,
+      entryIndex: trade.entryBar, exitIndex: null,
+    });
+    if (!openTrade) openTrade = { entry: trade.entry, tp: trade.tp, sl: trade.sl, dir: trade.dir };
+  }
+
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
+  if (bot.strategy === 'b5s') return runB5SStrategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -2180,13 +2373,20 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     return;
   }
   const isH9S = bot.strategy === 'h9s';
+  const isB5S = bot.strategy === 'b5s';
+  const isBOS = isH9S || isB5S;
 
   container.innerHTML = candidates
     .slice(0, 6)
     .map((candidate, idx) => {
-      const paramStr = isH9S
-        ? `Swing ${candidate.threshold} • ${candidate.bosConfType === 'wicks' ? 'Wicks' : 'Close'} • ${candidate.tpType === 'dynamic' ? 'Dyn TP' : `TP ${candidate.tp}% SL ${candidate.sl}%`}`
-        : `TP ${candidate.tp}% • SL ${candidate.sl}% • Th ${candidate.threshold}`;
+      let paramStr;
+      if (isBOS) {
+        const tpPart = candidate.tpType === 'dynamic' ? 'Dyn TP' : `TP ${candidate.tp}% SL ${candidate.sl}%`;
+        const tradesPart = isB5S ? ` • ${candidate.maxTrades ?? 3}T` : '';
+        paramStr = `Swing ${candidate.threshold} • ${candidate.bosConfType === 'wicks' ? 'Wicks' : 'Close'} • ${tpPart}${tradesPart}`;
+      } else {
+        paramStr = `TP ${candidate.tp}% • SL ${candidate.sl}% • Th ${candidate.threshold}`;
+      }
       return `
       <article class="optimizer-row">
         <div class="optimizer-rank">${idx + 1}</div>
@@ -2208,9 +2408,12 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       bot.tp = candidate.tp;
       bot.sl = candidate.sl;
       bot.threshold = candidate.threshold;
-      if (isH9S) {
+      if (isBOS) {
         bot.bosConfType = candidate.bosConfType;
         bot.tpType = candidate.tpType;
+      }
+      if (isB5S) {
+        bot.maxTrades = candidate.maxTrades ?? 3;
       }
       bot.winRate  = candidate.summary.winRate;
       bot.netPl    = candidate.summary.netPl;
@@ -2220,8 +2423,8 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       slInput.value = String(candidate.sl);
       thresholdInput.value = String(candidate.threshold);
       feedback.className = 'param-feedback good';
-      const label = isH9S
-        ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}`
+      const label = isBOS
+        ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}${isB5S ? ` / ${candidate.maxTrades ?? 3}T` : ''}`
         : `TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}`;
       feedback.textContent = `Applied candidate #${idx + 1}: ${label}.`;
       void saveSettings();
@@ -2337,6 +2540,31 @@ function setupChartParameterLab(bot) {
           }
         }
       }
+    } else if (bot.strategy === 'b5s') {
+      const swingCandidates = [5, 10, 15, 20, 25, 30, 50, 75, 100];
+      const bosConfCandidates = ['close', 'wicks'];
+      const tpTypeCandidates = ['dynamic', 'fixed'];
+      const maxTradesCandidates = [1, 2, 3, 5];
+      const tpCandidatesFixed = [0.6, 1.0, 1.5, 2.0];
+      const slCandidatesFixed = [1.0, 1.5, 2.0, 3.0];
+      for (const threshold of swingCandidates) {
+        for (const bosConfType of bosConfCandidates) {
+          for (const tpType of tpTypeCandidates) {
+            for (const maxTrades of maxTradesCandidates) {
+              const tpVals = tpType === 'dynamic' ? [1.0] : tpCandidatesFixed;
+              const slVals = tpType === 'dynamic' ? [1.0] : slCandidatesFixed;
+              for (const tp of tpVals) {
+                for (const sl of slVals) {
+                  const testBot = { ...bot, threshold, bosConfType, tpType, maxTrades, tp, sl };
+                  const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
+                  const score = scoreOptimizationCandidate(pkg.summary);
+                  candidates.push({ tp, sl, threshold, bosConfType, tpType, maxTrades, summary: pkg.summary, score });
+                }
+              }
+            }
+          }
+        }
+      }
     } else {
       const tpCandidates = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.2, 3.0];
       const slCandidates = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 9.0, 12.0];
@@ -2366,9 +2594,12 @@ function setupChartParameterLab(bot) {
     bot.tp = best.tp;
     bot.sl = best.sl;
     bot.threshold = best.threshold;
-    if (bot.strategy === 'h9s') {
+    if (bot.strategy === 'h9s' || bot.strategy === 'b5s') {
       bot.bosConfType = best.bosConfType;
       bot.tpType = best.tpType;
+    }
+    if (bot.strategy === 'b5s') {
+      bot.maxTrades = best.maxTrades ?? 3;
     }
     bot.winRate  = best.summary.winRate;
     bot.netPl    = best.summary.netPl;
@@ -2377,8 +2608,9 @@ function setupChartParameterLab(bot) {
     tpInput.value = String(best.tp);
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
-    const bestLabel = bot.strategy === 'h9s'
-      ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}`
+    const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
+    const bestLabel = isBOSBest
+      ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
       : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
