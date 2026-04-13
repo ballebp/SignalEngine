@@ -44,82 +44,63 @@
       </header>
 
       <section class="view" id="view-settings">
-        <div class="settings-bots-section">
-          <div class="settings-section-head">
-            <div class="section-kicker">Deployments</div>
-            <h3>Indicator Bots</h3>
-          </div>
-          <div class="bot-list" id="bot-list"></div>
-        </div>
+        <div class="settings-page-grid">
 
-        <div class="content-grid two-column">
           <section class="panel-card">
             <div class="panel-header">
-              <div>
-                <div class="section-kicker">Editable Runtime Fields</div>
-                <h3>Current Config</h3>
-              </div>
+              <div><div class="section-kicker">Account</div><h3>Profile &amp; Security</h3></div>
             </div>
-            <form class="config-form" id="config-form"></form>
-            <div class="settings-save-row">
-              <button class="ghost-button tr-send-btn" id="settings-save-btn" type="button">Save Settings</button>
-              <span class="settings-save-feedback" id="settings-save-feedback"></span>
+            <div class="settings-info-block">
+              <p class="settings-note">Profile, login and API key management will be available here in a future update. Currently all configuration is stored locally via Supabase.</p>
+              <div class="settings-kv">
+                <span class="mini-label">Storage</span><span>Supabase + localStorage fallback</span>
+                <span class="mini-label">Auth</span><span>Not yet required — single-user mode</span>
+              </div>
             </div>
           </section>
 
           <section class="panel-card">
             <div class="panel-header">
-              <div>
-                <div class="section-kicker">Serialized Output</div>
-                <h3>Config Preview</h3>
+              <div><div class="section-kicker">Getting Started</div><h3>Setup Guide</h3></div>
+            </div>
+            <ol class="settings-guide-list">
+              <li>Open your TradingView chart and add the indicator (AD1, H9S or B5S).</li>
+              <li>In the indicator settings, set <strong>Webhook Key</strong> to match the key in Bot Config on the Chart page.</li>
+              <li>In TradingView Alerts, set the webhook URL to your TradeRelay bot URL.</li>
+              <li>On the Chart page, expand <strong>Bot Configuration</strong>, paste your TradeRelay Bot URL and Webhook Code.</li>
+              <li>Switch to <strong>Live</strong> mode and enable <strong>Auto-Signal</strong> on the bot you want to activate.</li>
+            </ol>
+          </section>
+
+          <section class="panel-card">
+            <div class="panel-header">
+              <div><div class="section-kicker">Integration</div><h3>TradeRelay</h3></div>
+            </div>
+            <div class="settings-info-block">
+              <p class="settings-note">TradeRelay connects TradingView alerts to your broker. Each bot needs its own TradeRelay bot instance.</p>
+              <div class="settings-kv">
+                <span class="mini-label">Dashboard</span><a href="https://app.traderelay.io" target="_blank" rel="noopener">app.traderelay.io</a>
+                <span class="mini-label">Webhook format</span><span>JSON with <code>action</code> + <code>webhookCode</code> fields</span>
+                <span class="mini-label">Supported actions</span><span>ENTER-LONG · ENTER-SHORT · EXIT-ALL · EXIT-LONG · EXIT-SHORT</span>
               </div>
             </div>
-            <pre class="code-preview" id="config-preview"></pre>
           </section>
+
+          <section class="panel-card">
+            <div class="panel-header">
+              <div><div class="section-kicker">Broker</div><h3>Supported Brokers</h3></div>
+            </div>
+            <div class="settings-info-block">
+              <p class="settings-note">Connect any broker supported by TradeRelay. Configure your broker connection inside the TradeRelay dashboard.</p>
+              <div class="settings-kv">
+                <span class="mini-label">Futures</span><span>Binance Futures, Bybit, OKX, BitGet, MEXC</span>
+                <span class="mini-label">Spot</span><span>Binance Spot, Coinbase, Kraken</span>
+                <span class="mini-label">Paper</span><span>TradeRelay Paper Trading (no API keys needed)</span>
+              </div>
+            </div>
+          </section>
+
         </div>
-
-        <section class="panel-card tr-test-panel">
-          <div class="panel-header">
-            <div>
-              <div class="section-kicker">TradeRelay</div>
-              <h3>Send Test Signal</h3>
-            </div>
-            <div id="tr-connection-badge" class="tr-badge tr-badge-idle">Not configured</div>
-          </div>
-          <div class="tr-url-row">
-            <span class="mini-label">Webhook URL</span>
-            <span id="tr-url-display" class="tr-url-display">— paste URL in bot config above —</span>
-          </div>
-          <div class="tr-controls">
-            <label class="param-field" for="tr-action">
-              <span>Action</span>
-              <select id="tr-action">
-                <option>ENTER-LONG</option>
-                <option>ENTER-SHORT</option>
-                <option>EXIT-ALL</option>
-                <option>EXIT-LONG</option>
-                <option>EXIT-SHORT</option>
-              </select>
-            </label>
-            <div class="tr-message-wrap">
-              <span class="mini-label">Message</span>
-              <code id="tr-message-preview" class="tr-message-preview">—</code>
-            </div>
-            <button class="ghost-button replay-btn tr-send-btn" id="tr-send-btn" type="button" disabled>Send Test Signal</button>
-          </div>
-          <div id="tr-response" class="tr-response"></div>
-        </section>
-
-        <section class="panel-card settings-signal-log">
-          <div class="panel-header">
-            <div>
-              <div class="section-kicker">Webhook History</div>
-              <h3>Signal Log</h3>
-            </div>
-            <button class="ghost-button" id="signal-log-refresh-btn" type="button">↻ Refresh</button>
-          </div>
-          <div class="log-table" id="signal-table"></div>
-        </section>
       </section>
 
       <section class="view is-visible" id="view-chart">
@@ -233,6 +214,60 @@
             </div>
           </div>
         </section>
+
+        <section class="chart-collapsible is-collapsed" id="chart-tr-panel">
+          <div class="chart-collapsible-head">
+            <div>
+              <div class="section-kicker">TradeRelay</div>
+              <h3>Send Test Signal</h3>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <div id="tr-connection-badge" class="tr-badge tr-badge-idle">Not configured</div>
+              <button class="ghost-button replay-btn" id="toggle-tr-panel" type="button" aria-expanded="false">Expand</button>
+            </div>
+          </div>
+          <div class="chart-tr-panel-body">
+            <div class="tr-url-row">
+              <span class="mini-label">Webhook URL</span>
+              <span id="tr-url-display" class="tr-url-display">— paste URL in Bot Configuration above —</span>
+            </div>
+            <div class="tr-controls">
+              <label class="param-field" for="tr-action">
+                <span>Action</span>
+                <select id="tr-action">
+                  <option>ENTER-LONG</option>
+                  <option>ENTER-SHORT</option>
+                  <option>EXIT-ALL</option>
+                  <option>EXIT-LONG</option>
+                  <option>EXIT-SHORT</option>
+                </select>
+              </label>
+              <div class="tr-message-wrap">
+                <span class="mini-label">Message</span>
+                <code id="tr-message-preview" class="tr-message-preview">—</code>
+              </div>
+              <button class="ghost-button replay-btn tr-send-btn" id="tr-send-btn" type="button" disabled>Send Test Signal</button>
+            </div>
+            <div id="tr-response" class="tr-response"></div>
+          </div>
+        </section>
+
+        <section class="chart-collapsible is-collapsed" id="chart-signal-log-panel">
+          <div class="chart-collapsible-head">
+            <div>
+              <div class="section-kicker">Webhook History</div>
+              <h3>Signal Log</h3>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button class="ghost-button" id="signal-log-refresh-btn" type="button">↻ Refresh</button>
+              <button class="ghost-button replay-btn" id="toggle-signal-log" type="button" aria-expanded="false">Expand</button>
+            </div>
+          </div>
+          <div class="chart-signal-log-body">
+            <div class="log-table" id="signal-table"></div>
+          </div>
+        </section>
+
         <div class="chart-wrapper">
           <div class="chart-binance-topbar">
             <div class="chart-time-pills" id="chart-time-pills">

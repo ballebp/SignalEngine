@@ -320,6 +320,7 @@ function renderDashboardSignals() {
 }
 
 function renderBots() {
+  if (!botList) return;
   botList.innerHTML = state.bots
     .map(
       (bot) => {
@@ -349,6 +350,7 @@ function renderBots() {
     )
     .join('');
 
+  if (!botList) return;
   botList.querySelectorAll('[data-bot-id]').forEach((item) => {
     item.addEventListener('click', () => {
       state.selectedBotId = item.dataset.botId;
@@ -493,6 +495,7 @@ function renderConfigForm() {
 
   const TF_OPTIONS = ['1m','3m','5m','15m','30m','1h','4h','1d','1w'];
 
+  if (!configForm) return;
   configForm.innerHTML = fields
     .map(([key, label, value]) => {
       const wide = key === 'tradeRelayUrl' || key === 'tradeRelayWebhookCode' || key.startsWith('source');
@@ -595,6 +598,7 @@ function renderConfigPreview() {
     };
   }
 
+  if (!configPreview) return;
   configPreview.textContent = JSON.stringify(normalized, null, 2);
 }
 
@@ -3179,21 +3183,7 @@ async function logSignalToSupabase(bot, signalCode, event, status = 'sent') {
 }
 
 function setupSaveButton() {
-  const btn = document.getElementById('settings-save-btn');
-  const feedback = document.getElementById('settings-save-feedback');
-  if (!btn || !feedback) return;
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
-    const ok = await saveSettings();
-    btn.disabled = false;
-    btn.textContent = 'Save Settings';
-    feedback.textContent = ok ? '✓ Saved to cloud' : '✗ Could not save';
-    feedback.className = `settings-save-feedback ${ok ? 'save-ok' : 'save-err'}`;
-    clearTimeout(btn._saveTimer);
-    btn._saveTimer = setTimeout(() => { feedback.textContent = ''; }, 3000);
-    refreshTradeRelayPanel();
-  });
+  // Save button moved — auto-save on every field change via saveSettings()
 }
 
 // Bootstrap: load settings first, then render
@@ -3207,5 +3197,24 @@ loadSavedSettings().then(() => {
   setupSaveButton();
   const refreshBtn = document.getElementById('signal-log-refresh-btn');
   if (refreshBtn) refreshBtn.addEventListener('click', () => renderSignalTable());
+  // Wire chart-page collapsibles for TR panel and signal log
+  const trToggle = document.getElementById('toggle-tr-panel');
+  if (trToggle) {
+    const trPanel = document.getElementById('chart-tr-panel');
+    trToggle.onclick = () => {
+      const collapsed = trPanel.classList.toggle('is-collapsed');
+      trToggle.textContent = collapsed ? 'Expand' : 'Collapse';
+      trToggle.setAttribute('aria-expanded', String(!collapsed));
+    };
+  }
+  const slToggle = document.getElementById('toggle-signal-log');
+  if (slToggle) {
+    const slPanel = document.getElementById('chart-signal-log-panel');
+    slToggle.onclick = () => {
+      const collapsed = slPanel.classList.toggle('is-collapsed');
+      slToggle.textContent = collapsed ? 'Expand' : 'Collapse';
+      slToggle.setAttribute('aria-expanded', String(!collapsed));
+    };
+  }
   requestAnimationFrame(() => void initChart(state.selectedBotId));
 });

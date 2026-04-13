@@ -1889,8 +1889,63 @@ body.is-compact .panel-header h3 {
 }
 
 /* ── Settings page ── */
-.settings-bots-section {
-  margin-bottom: 16px;
+.settings-page-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 700px) {
+  .settings-page-grid { grid-template-columns: 1fr; }
+}
+
+.settings-info-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.settings-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 13px;
+  align-items: baseline;
+}
+
+.settings-kv .mini-label {
+  white-space: nowrap;
+}
+
+.settings-kv a {
+  color: #27d3c5;
+}
+
+.settings-guide-list {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  padding-left: 18px;
+  margin: 0;
+}
+
+.settings-guide-list strong {
+  color: var(--text);
+}
+
+/* hide old settings elements that no longer exist */
+.settings-bots-section { display: none; }
+
+.chart-collapsible.is-collapsed .chart-tr-panel-body,
+.chart-collapsible.is-collapsed .chart-signal-log-body {
+  display: none;
 }
 
 .settings-section-head {
