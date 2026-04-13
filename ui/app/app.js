@@ -2288,14 +2288,22 @@ function parseLocaleNumber(rawValue, fallback) {
 }
 
 function averageSummaries(summaries) {
-  if (!summaries.length) return { netPl: 0, maxDrawdown: 0, winRate: 50, trades: 0, profitFactor: 1 };
+  if (!summaries.length) return { netPl: 0, maxDrawdown: 0, winRate: 50, trades: 0, profitFactor: 1, consistency: 0, netPlStdDev: 0 };
   const n = summaries.length;
+  const profitableCount = summaries.filter(s => s.netPl > 0).length;
+  const consistency = profitableCount / n;
+  const avgNetPl = summaries.reduce((s, x) => s + x.netPl, 0) / n;
+  const netPlStdDev = n > 1
+    ? Math.sqrt(summaries.reduce((s, x) => s + (x.netPl - avgNetPl) ** 2, 0) / n)
+    : 0;
   return {
-    netPl:        summaries.reduce((s, x) => s + x.netPl, 0) / n,
+    netPl:        avgNetPl,
     maxDrawdown:  summaries.reduce((s, x) => s + x.maxDrawdown, 0) / n,
     winRate:      summaries.reduce((s, x) => s + x.winRate, 0) / n,
     trades:       Math.round(summaries.reduce((s, x) => s + x.trades, 0) / n),
     profitFactor: summaries.reduce((s, x) => s + Math.min(x.profitFactor ?? 1, 20), 0) / n,
+    consistency,
+    netPlStdDev,
   };
 }
 
@@ -2320,7 +2328,11 @@ function scoreOptimizationCandidate(summary) {
   const tradeFactor = Math.max(0.2, Math.min(1, summary.trades / 35));
   const pfBoost = Math.min(summary.profitFactor, 5) * 3;
   const edgeBoost = (summary.winRate - 50) * 0.18;
-  const score = (summary.netPl * 1.2) - (summary.maxDrawdown * 0.72) + pfBoost + edgeBoost;
+  // Consistency bonus: reward strategies that are profitable across all sampled periods
+  const consistencyBonus = (summary.consistency ?? 1) * 8;
+  // Smoothness penalty: if stdDev of per-period returns is high, penalise (lucky outlier)
+  const smoothnessPenalty = (summary.netPlStdDev ?? 0) * 0.3;
+  const score = (summary.netPl * 1.2) - (summary.maxDrawdown * 0.72) + pfBoost + edgeBoost + consistencyBonus - smoothnessPenalty;
   return score * tradeFactor;
 }
 
@@ -2615,8 +2627,7 @@ function setupChartParameterLab(bot) {
     feedback.className = 'param-feedback';
     feedback.textContent = 'Fetching data for optimizer…';
     optimizeButton.disabled = true;
-    // Fetch 4 chunks spread across the past 2 years so the optimizer finds params
-    // that generalise across market conditions rather than fitting recent data only
+    // Fetch 4 chunks spread across the past 2 years IN PARALLEL for speed
     const twoYearsMs = 2 * 365 * 24 * 60 * 60 * 1000;
     const sources = [];
     const tryFetch = async (endMs) => {
@@ -2626,11 +2637,11 @@ function setupChartParameterLab(bot) {
       } catch {}
     };
     try {
-      await tryFetch(null); // most recent chunk always included
-      for (let i = 0; i < 3; i++) {
-        const endMs = Date.now() - Math.floor(Math.random() * twoYearsMs);
-        await tryFetch(endMs);
-      }
+      const randomEnds = Array.from({ length: 3 }, () => Date.now() - Math.floor(Math.random() * twoYearsMs));
+      await Promise.all([
+        tryFetch(null),          // most recent chunk always included
+        ...randomEnds.map(e => tryFetch(e)),
+      ]);
     } finally {
       optimizeButton.disabled = false;
     }
@@ -2708,6 +2719,42 @@ function setupChartParameterLab(bot) {
     }
 
     candidates.sort((a, b) => b.score - a.score);
+
+    // ── Genetic refinement pass ──────────────────────────────────────────────
+    // Take top 5 grid-search winners, mutate numeric params ±1 step each
+    // direction and re-evaluate — finds finer optima between grid points.
+    feedback.textContent = 'Refining top candidates…';
+    const tpStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.1 : 0.2;
+    const slStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.25 : 0.5;
+    const thStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 5   : 2;
+    const TOP_N = Math.min(5, candidates.length);
+    for (let ci = 0; ci < TOP_N; ci++) {
+      const seed = candidates[ci];
+      const mutations = [];
+      const tpRange  = [seed.tp - tpStep, seed.tp, seed.tp + tpStep].filter(v => v > 0);
+      const slRange  = [seed.sl - slStep, seed.sl, seed.sl + slStep].filter(v => v > 0);
+      const thRange  = [seed.threshold - thStep, seed.threshold, seed.threshold + thStep].filter(v => v > 0);
+      for (const tp of tpRange) {
+        for (const sl of slRange) {
+          for (const th of thRange) {
+            if (tp === seed.tp && sl === seed.sl && th === seed.threshold) continue; // skip exact duplicate
+            const testBot = {
+              ...bot, tp: +tp.toFixed(3), sl: +sl.toFixed(3), threshold: +th.toFixed(1),
+              ...(seed.bosConfType !== undefined && { bosConfType: seed.bosConfType }),
+              ...(seed.tpType      !== undefined && { tpType: seed.tpType }),
+              ...(seed.maxTrades   !== undefined && { maxTrades: seed.maxTrades }),
+            };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            mutations.push({ ...seed, tp: testBot.tp, sl: testBot.sl, threshold: testBot.threshold, summary: avgSummary, score });
+          }
+        }
+      }
+      candidates.push(...mutations);
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    // ────────────────────────────────────────────────────────────────────────
+
     const best = candidates[0];
 
     if (!best) {
@@ -2771,6 +2818,22 @@ async function fireNewLiveSignals(bot) {
   const lastFired = chartState.lastFiredByBot[bot.id] ?? Math.floor(Date.now() / 1000);
   const newSignals = signals.filter((s) => s.time > lastFired);
   for (const signal of newSignals) {
+    // AI confidence gate — check before firing
+    if (aiGateSettings.enabled && aiGateSettings.apiKey) {
+      const confidence = await checkAiConfidence(bot, signal);
+      const statusEl = document.getElementById('ai-gate-status');
+      if (confidence === null) {
+        if (statusEl) statusEl.textContent = 'Gate error — signal allowed through';
+        if (statusEl) statusEl.style.color = '#f7bc52';
+      } else if (confidence < aiGateSettings.threshold) {
+        chartState.lastFiredByBot[bot.id] = signal.time;
+        if (statusEl) { statusEl.textContent = `Blocked: ${signal.event} (${confidence}% < ${aiGateSettings.threshold}%)`; statusEl.style.color = '#ff6d6d'; }
+        showSignalToast(`🤖 AI blocked ${signal.event} — confidence ${confidence}% (threshold ${aiGateSettings.threshold}%)`, 'warn');
+        continue;
+      } else {
+        if (statusEl) { statusEl.textContent = `Allowed: ${signal.event} (${confidence}%)`; statusEl.style.color = '#2ddb75'; }
+      }
+    }
     let ok = false;
     try {
       const res = await sendTradeRelaySignal(bot.tradeRelayUrl, signal.code);
@@ -2788,6 +2851,42 @@ async function fireNewLiveSignals(bot) {
     }
     // Always advance cursor so next poll doesn't retry failed signals
     chartState.lastFiredByBot[bot.id] = signal.time;
+  }
+}
+
+async function checkAiConfidence(bot, signal) {
+  try {
+    const candles = (chartState.data?.candles || []).slice(-20);
+    if (!candles.length) return null;
+    const candleSummary = candles.map(c =>
+      `O:${c.open.toFixed(2)} H:${c.high.toFixed(2)} L:${c.low.toFixed(2)} C:${c.close.toFixed(2)}`
+    ).join('\n');
+    const prompt =
+      `You are a professional crypto trader. Rate this ${signal.direction} trade setup on ${bot.symbol} (${bot.timeframe}) from 0 to 100 based ONLY on the last 20 candles below.\n` +
+      `Signal: ${signal.event}\nStrategy: ${bot.strategy || 'AD1'}\n\nLast 20 candles (oldest first):\n${candleSummary}\n\n` +
+      `Reply with ONLY a JSON object: {"confidence": <integer 0-100>, "reason": "<one sentence>"}`;
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aiGateSettings.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 80,
+        temperature: 0.2,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]);
+    return typeof parsed.confidence === 'number' ? Math.round(parsed.confidence) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -3023,11 +3122,19 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const STORAGE_KEY = 'signal-engine-bots-v1'; // offline fallback
 const SIM_SETTINGS_KEY = 'signal-engine-sim-v1';
+const AI_GATE_KEY = 'signal-engine-ai-gate-v1';
 
 // Global simulation cost settings (account-level, not per-bot)
 const simSettings = {
   commission: 0.05,  // % per side (round-trip = 2×)
   slippage:   0.05,  // % per side (round-trip = 2×)
+};
+
+// AI confidence gate settings
+const aiGateSettings = {
+  enabled:   false,
+  apiKey:    '',
+  threshold: 65,   // 0–100 minimum confidence to allow signal
 };
 
 function saveSimSettings() {
@@ -3041,6 +3148,21 @@ function loadSimSettings() {
     const parsed = JSON.parse(raw);
     if (typeof parsed.commission === 'number') simSettings.commission = parsed.commission;
     if (typeof parsed.slippage   === 'number') simSettings.slippage   = parsed.slippage;
+  } catch { /* ignore */ }
+}
+
+function saveAiGateSettings() {
+  try { localStorage.setItem(AI_GATE_KEY, JSON.stringify(aiGateSettings)); } catch { /* ignore */ }
+}
+
+function loadAiGateSettings() {
+  try {
+    const raw = localStorage.getItem(AI_GATE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.enabled   === 'boolean') aiGateSettings.enabled   = parsed.enabled;
+    if (typeof parsed.apiKey    === 'string')  aiGateSettings.apiKey    = parsed.apiKey;
+    if (typeof parsed.threshold === 'number')  aiGateSettings.threshold = parsed.threshold;
   } catch { /* ignore */ }
 }
 
@@ -3106,6 +3228,37 @@ async function logSignalToSupabase(bot, signalCode, event, status = 'sent') {
   } catch { /* non-blocking */ }
 }
 
+function setupAiGateSettings() {
+  const enabledInput   = document.getElementById('ai-gate-enabled');
+  const keyInput       = document.getElementById('ai-gate-key');
+  const thresholdInput = document.getElementById('ai-gate-threshold');
+  const statusEl       = document.getElementById('ai-gate-status');
+  if (!enabledInput || !keyInput || !thresholdInput) return;
+
+  enabledInput.checked   = aiGateSettings.enabled;
+  keyInput.value         = aiGateSettings.apiKey;
+  thresholdInput.value   = String(aiGateSettings.threshold);
+  if (statusEl) statusEl.textContent = aiGateSettings.enabled ? 'Enabled — awaiting signals' : 'Disabled';
+
+  enabledInput.addEventListener('change', () => {
+    aiGateSettings.enabled = enabledInput.checked;
+    if (statusEl) statusEl.textContent = aiGateSettings.enabled ? 'Enabled — awaiting signals' : 'Disabled';
+    if (statusEl) statusEl.style.color = '';
+    saveAiGateSettings();
+  });
+  keyInput.addEventListener('change', () => {
+    aiGateSettings.apiKey = keyInput.value.trim();
+    saveAiGateSettings();
+  });
+  thresholdInput.addEventListener('change', () => {
+    const v = parseInt(thresholdInput.value, 10);
+    if (Number.isFinite(v) && v >= 0 && v <= 100) {
+      aiGateSettings.threshold = v;
+      saveAiGateSettings();
+    }
+  });
+}
+
 function setupSaveButton() {
   // Save button moved — auto-save on every field change via saveSettings()
 }
@@ -3149,6 +3302,7 @@ function setupSimSettings() {
 
 // Bootstrap: load settings first, then render
 loadSimSettings();
+loadAiGateSettings();
 loadSavedSettings().then(() => {
   renderAll();
   renderSignalTable();
@@ -3158,6 +3312,7 @@ loadSavedSettings().then(() => {
   setupTradeRelayTestPanel();
   setupSaveButton();
   setupSimSettings();
+  setupAiGateSettings();
   const refreshBtn = document.getElementById('signal-log-refresh-btn');
   if (refreshBtn) refreshBtn.addEventListener('click', () => renderSignalTable());
   // Wire chart-page collapsibles for TR panel and signal log

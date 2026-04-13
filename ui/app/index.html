@@ -124,6 +124,40 @@
             </div>
           </section>
 
+          <section class="panel-card">
+            <div class="panel-header">
+              <div><div class="section-kicker">AI Gate</div><h3>AI Signal Confidence Filter</h3></div>
+            </div>
+            <div class="settings-info-block">
+              <p class="settings-note">When enabled, each live signal is sent to OpenAI before firing. The model rates the setup 0–100 based on recent price action. Signals below the threshold are suppressed.</p>
+              <div class="settings-sim-fields">
+                <div class="sim-field-row">
+                  <label class="mini-label" for="ai-gate-enabled">Enable AI Gate</label>
+                  <label class="toggle-switch">
+                    <input id="ai-gate-enabled" type="checkbox">
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+                <div class="sim-field-row">
+                  <label class="mini-label" for="ai-gate-key">OpenAI API Key</label>
+                  <input id="ai-gate-key" type="password" class="sim-field-input ai-key-input" placeholder="sk-…" autocomplete="off">
+                </div>
+                <div class="sim-field-row">
+                  <label class="mini-label" for="ai-gate-threshold">Min confidence %</label>
+                  <input id="ai-gate-threshold" type="number" class="sim-field-input" min="0" max="100" step="5" value="65">
+                </div>
+                <div class="sim-field-row">
+                  <span class="mini-label">Model</span>
+                  <span class="sim-field-hint" style="color:var(--text)">gpt-4o-mini (fast + cheap)</span>
+                </div>
+                <div class="sim-field-row" id="ai-gate-status-row">
+                  <span class="mini-label">Status</span>
+                  <span id="ai-gate-status" class="sim-field-hint">Disabled</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
         </div>
       </section>
 
