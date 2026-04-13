@@ -460,6 +460,7 @@ function renderConfigForm() {
   const isH9S = bot.strategy === 'h9s';
   const isB5S = bot.strategy === 'b5s';
   const isBOS = isH9S || isB5S;
+  const bosFixed = isBOS && (bot.tpType || 'dynamic') === 'fixed';
   const fields = [
     ['name', 'Bot Name', bot.name],
     ['symbol', 'Symbol', bot.symbol],
@@ -467,12 +468,14 @@ function renderConfigForm() {
     ['webhookKey', 'Webhook Key', bot.webhookKey],
     ['tradeRelayUrl', 'TradeRelay Bot URL', bot.tradeRelayUrl || ''],
     ['tradeRelayWebhookCode', 'TradeRelay Webhook Code (step 1 from bot settings)', bot.tradeRelayWebhookCode || ''],
-    ['tp', 'Take Profit %', bot.tp],
-    ['sl', 'Stop Loss %', bot.sl],
     ['threshold', isBOS ? 'Swing Size' : 'Threshold', bot.threshold],
     ...(isBOS ? [
       ['bosConfType', 'Confirm (Wicks / Close)', bot.bosConfType || 'close'],
       ['tpType', 'TP Type (dynamic / fixed)', bot.tpType || 'dynamic'],
+    ] : []),
+    ...(!isBOS || bosFixed ? [
+      ['tp', 'Take Profit %', bot.tp],
+      ['sl', 'Stop Loss %', bot.sl],
     ] : []),
     ...(isH9S ? [
       ['slippage', 'Slippage %', bot.slippage ?? 0.05],
