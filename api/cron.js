@@ -542,6 +542,237 @@ function runAI3(candles, bot) {
   return signals;
 }
 
+// ── VW1 — VWAP Deviation Mean-Reversion ──────────────────────────────────────
+
+function runVW1(candles, bot) {
+  const devPct  = Math.max(5, Math.min(49, Number(bot.threshold || 20)));
+  const tpMult  = Math.max(0.3, Number(bot.tp || 1.8));
+  const slMult  = Math.max(0.2, Number(bot.sl || 0.9));
+  const vwapWin = 100;
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.012;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.012;
+  }
+
+  function calcVwap(i) {
+    let tpv = 0, vol = 0;
+    for (let j = Math.max(0, i - vwapWin + 1); j <= i; j++) {
+      const v = Math.max(candles[j].volume || 1, 1);
+      tpv += ((candles[j].high + candles[j].low + candles[j].close) / 3) * v;
+      vol += v;
+    }
+    return vol > 0 ? tpv / vol : candles[i].close;
+  }
+
+  const gapHistory = [];
+  const signals = [];
+  let position = null;
+
+  for (let i = vwapWin; i < candles.length; i++) {
+    const bar  = candles[i];
+    const vwap = calcVwap(i);
+    const gap  = (bar.close - vwap) / vwap * 100;
+    gapHistory.push(gap);
+    if (gapHistory.length > 200) gapHistory.shift();
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position && gapHistory.length >= 50) {
+      const rank = percentileRank(gapHistory, gap);
+      const atr  = atrAt(i);
+      if (rank <= devPct && gap < 0) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (rank >= (100 - devPct) && gap > 0) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
+// ── KC1 — Keltner Channel Trend Breakout ──────────────────────────────────────
+
+function runKC1(candles, bot) {
+  const emaPeriod = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.2));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.1));
+  const atrMult   = 2.0;
+
+  function calcEma(data, period) {
+    const k = 2 / (period + 1); let prev = NaN;
+    return data.map(v => { prev = isNaN(prev) ? v : v * k + prev * (1 - k); return prev; });
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const ema = calcEma(candles.map(c => c.close), emaPeriod);
+  const signals = [];
+  let position = null;
+
+  for (let i = emaPeriod + 16; i < candles.length; i++) {
+    const bar = candles[i];
+    const atr = atrAt(i);
+    const upper = ema[i] + atrMult * atr;
+    const lower = ema[i] - atrMult * atr;
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position) {
+      const bullTrend = candles[i].close > candles[i-1].close && candles[i-1].close > candles[i-2].close;
+      const bearTrend = candles[i].close < candles[i-1].close && candles[i-1].close < candles[i-2].close;
+      if (bar.close > upper && bullTrend) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (bar.close < lower && bearTrend) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
+// ── DV1 — Donchian Velocity + Volume Surge ────────────────────────────────────
+
+function runDV1(candles, bot) {
+  const dcPeriod = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult   = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult   = Math.max(0.3, Number(bot.sl || 1.0));
+  const volAvgP  = 20;
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const bodyBuf = [];
+  const signals = [];
+  let position = null;
+
+  for (let i = dcPeriod + volAvgP + 5; i < candles.length; i++) {
+    const bar  = candles[i];
+    const body = Math.abs(bar.close - bar.open);
+    bodyBuf.push(body); if (bodyBuf.length > 50) bodyBuf.shift();
+
+    let dcHigh = -Infinity, dcLow = Infinity;
+    for (let j = i - dcPeriod; j < i; j++) {
+      if (candles[j].high > dcHigh) dcHigh = candles[j].high;
+      if (candles[j].low  < dcLow)  dcLow  = candles[j].low;
+    }
+    let volSum = 0;
+    for (let j = i - volAvgP; j < i; j++) volSum += Math.max(candles[j].volume || 1, 1);
+    const volAvg = volSum / volAvgP;
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position && bodyBuf.length >= 20) {
+      const bodyRank = percentileRank(bodyBuf, body);
+      const volSurge = Math.max(bar.volume || 1, 1) > volAvg * 1.3;
+      const atr = atrAt(i);
+      if (bar.close > dcHigh && bar.close > bar.open && bodyRank >= 70 && volSurge) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (bar.close < dcLow && bar.close < bar.open && bodyRank >= 70 && volSurge) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
+// ── RS1 — Rate-of-Change Divergence Reversal ─────────────────────────────────
+
+function runRS1(candles, bot) {
+  const rocPeriod = Math.max(3, Math.round(Number(bot.threshold || 14)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.3));
+  const swingWin  = 5;
+
+  function calcRoc(i) {
+    if (i < rocPeriod) return 0;
+    const prev = candles[i - rocPeriod].close;
+    return prev > 0 ? (candles[i].close - prev) / prev * 100 : 0;
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const swingLows = [], swingHighs = [];
+  const signals = [];
+  let position = null;
+
+  for (let i = rocPeriod + swingWin * 2 + 5; i < candles.length; i++) {
+    const bar = candles[i];
+    const roc = calcRoc(i);
+    const pivIdx = i - swingWin;
+    if (pivIdx >= swingWin) {
+      const piv = candles[pivIdx];
+      let isLow = true, isHigh = true;
+      for (let k = pivIdx - swingWin; k <= pivIdx + swingWin; k++) {
+        if (k === pivIdx) continue;
+        if (candles[k].low  <= piv.low)  isLow  = false;
+        if (candles[k].high >= piv.high) isHigh = false;
+      }
+      if (isLow)  { swingLows.push({ price: piv.low,   roc: calcRoc(pivIdx) }); if (swingLows.length  > 10) swingLows.shift(); }
+      if (isHigh) { swingHighs.push({ price: piv.high, roc: calcRoc(pivIdx) }); if (swingHighs.length > 10) swingHighs.shift(); }
+    }
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position && swingLows.length >= 2 && swingHighs.length >= 2) {
+      const atr  = atrAt(i);
+      const prevL = swingLows[swingLows.length - 1];
+      const prevH = swingHighs[swingHighs.length - 1];
+      if (bar.low < prevL.price && roc > prevL.roc && roc < 0) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (bar.high > prevH.price && roc < prevH.roc && roc > 0) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 // ── Signal code builder ───────────────────────────────────────────────────────
 
 function signalCode(bot, event) {
@@ -649,6 +880,10 @@ export default async function handler(req, res) {
         else if (strategy === 'ai1')  signals = runAI1(candles, bot);
         else if (strategy === 'ai2')  signals = runAI2(candles, bot);
         else if (strategy === 'ai3')  signals = runAI3(candles, bot);
+        else if (strategy === 'vw1')  signals = runVW1(candles, bot);
+        else if (strategy === 'kc1')  signals = runKC1(candles, bot);
+        else if (strategy === 'dv1')  signals = runDV1(candles, bot);
+        else if (strategy === 'rs1')  signals = runRS1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired

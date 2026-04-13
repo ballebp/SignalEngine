@@ -145,6 +145,67 @@ const state = {
       sl: 1.5,      // ATR multiplier for stop-loss
       threshold: 14, // Stochastic K lookback period
     },
+    // ── Creative / structural strategies ────────────────────────────────────
+    {
+      id: 'vw1-xrp-5m',
+      name: 'VW1 / VWAP Reversion',
+      symbol: 'XRPUSDT',
+      timeframe: '5m',
+      strategy: 'vw1',
+      webhookKey: 'VW1_XRP',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 1.8,       // ATR × multiplier to TP (target the VWAP centre)
+      sl: 0.9,       // ATR × multiplier to SL
+      threshold: 20, // deviation percentile: fire when price > this pct from VWAP
+    },
+    {
+      id: 'kc1-bnb-1h',
+      name: 'KC1 / Keltner Breakout',
+      symbol: 'BNBUSDT',
+      timeframe: '1h',
+      strategy: 'kc1',
+      webhookKey: 'KC1_BNB',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.2,       // ATR multiplier for TP
+      sl: 1.1,       // ATR multiplier for SL
+      threshold: 20, // EMA period for Keltner centre line
+    },
+    {
+      id: 'dv1-doge-15m',
+      name: 'DV1 / Donchian Velocity',
+      symbol: 'DOGEUSDT',
+      timeframe: '15m',
+      strategy: 'dv1',
+      webhookKey: 'DV1_DOGE',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.0,       // ATR multiplier for TP
+      sl: 1.0,       // ATR multiplier for SL
+      threshold: 20, // Donchian channel period
+    },
+    {
+      id: 'rs1-avax-1h',
+      name: 'RS1 / ROC Divergence',
+      symbol: 'AVAXUSDT',
+      timeframe: '1h',
+      strategy: 'rs1',
+      webhookKey: 'RS1_AVAX',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.5,       // ATR multiplier for TP
+      sl: 1.3,       // ATR multiplier for SL
+      threshold: 14, // ROC lookback period
+    },
   ],
   scenarios: [
     {
@@ -1837,12 +1898,379 @@ function runAI3Strategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+// ── VW1 Strategy — VWAP Deviation Mean-Reversion ─────────────────────────────
+// Computes a rolling 1-day VWAP anchor. When price deviates beyond the N-th
+// percentile of its historical VWAP-gap distribution, it bets on the snap-back.
+// Long: price < VWAP and the gap is < (100-threshold) percentile (extreme low).
+// Short: price > VWAP and the gap is > threshold percentile (extreme high).
+// ATR-based TP/SL — mean-reversion means tighter targets are more appropriate.
+function runVW1Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const devPct  = Math.max(5, Math.min(49, Number(bot.threshold || 20)));
+  const tpMult  = Math.max(0.3, Number(bot.tp || 1.8));
+  const slMult  = Math.max(0.2, Number(bot.sl || 0.9));
+  const vwapWin = 100; // bars per rolling VWAP window
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.012;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.012;
+  }
+
+  // Rolling VWAP over the previous `vwapWin` bars
+  function calcVwap(i) {
+    let tpvSum = 0, volSum = 0;
+    const start = Math.max(0, i - vwapWin + 1);
+    for (let j = start; j <= i; j++) {
+      const c = candles[j];
+      const typicalPrice = (c.high + c.low + c.close) / 3;
+      const vol = Math.max(c.volume || 1, 1);
+      tpvSum += typicalPrice * vol;
+      volSum += vol;
+    }
+    return volSum > 0 ? tpvSum / volSum : candles[i].close;
+  }
+
+  const gapHistory = [];
+  let position = null;
+
+  for (let i = vwapWin; i < candles.length; i++) {
+    const bar  = candles[i];
+    const vwap = calcVwap(i);
+    const gap  = (bar.close - vwap) / vwap * 100; // % above/below VWAP
+    gapHistory.push(gap);
+    if (gapHistory.length > 200) gapHistory.shift();
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason   = hitTP ? 'tp' : 'sl';
+        const exitPx   = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position && gapHistory.length >= 50) {
+      const rank = percentileRank(gapHistory, gap);
+      const atr  = atrAt(i);
+      // Oversold extreme — expect snap back up to VWAP
+      if (rank <= devPct && gap < 0) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      // Overbought extreme — expect snap back down to VWAP
+      } else if (rank >= (100 - devPct) && gap > 0) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── KC1 Strategy — Keltner Channel Trend Breakout ─────────────────────────────
+// Keltner Channels use ATR-based bands around an EMA (not stddev like Bollinger).
+// This makes them wider in trending markets and narrower in calmer ones.
+// Signal: close breaks OUTSIDE the channel (strong trend expansion).
+// Filter: require the last 3 bars to be progressive (trending) — avoids whipsaws.
+// Uses a 2× ATR trailing approach: SL hugs below the EMA, TP is ATR-projected.
+function runKC1Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const emaPeriod = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.2));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.1));
+  const atrMult   = 2.0; // KC band width
+
+  function calcEma(data, period) {
+    const k = 2 / (period + 1); let prev = NaN;
+    return data.map(v => { prev = isNaN(prev) ? v : v * k + prev * (1 - k); return prev; });
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const closes = candles.map(c => c.close);
+  const ema    = calcEma(closes, emaPeriod);
+  const warmup = emaPeriod + 16;
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const atr  = atrAt(i);
+    const mid  = ema[i];
+    const upper = mid + atrMult * atr;
+    const lower = mid - atrMult * atr;
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason = hitTP ? 'tp' : 'sl';
+        const exitPx = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position) {
+      // Require 3 consecutive higher closes (bullish momentum) before taking the long
+      const bullTrend = candles[i].close > candles[i - 1].close && candles[i - 1].close > candles[i - 2].close;
+      const bearTrend = candles[i].close < candles[i - 1].close && candles[i - 1].close < candles[i - 2].close;
+
+      if (bar.close > upper && bullTrend) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (bar.close < lower && bearTrend) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── DV1 Strategy — Donchian Velocity + Volume Surge ──────────────────────────
+// Donchian channels (highest high / lowest low over N bars) mark breakouts.
+// But raw Donchian signals are noisy. DV1 adds a volume-surge filter:
+// only fires if the breakout candle's body is in the top-30th percentile of
+// recent bar bodies AND close-volume is above its 20-bar average.
+// This selects explosive breakout candles, not slow drift-throughs.
+function runDV1Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const dcPeriod  = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.0));
+  const volAvgP   = 20;
+  const bodyPctTh = 70; // body must be ≥ 70th percentile of recent bodies
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const warmup  = dcPeriod + volAvgP + 5;
+  let position  = null;
+  const bodyBuf = [];
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const body = Math.abs(bar.close - bar.open);
+    bodyBuf.push(body);
+    if (bodyBuf.length > 50) bodyBuf.shift();
+
+    // Donchian channel (exclude current bar)
+    let dcHigh = -Infinity, dcLow = Infinity;
+    for (let j = i - dcPeriod; j < i; j++) {
+      if (candles[j].high > dcHigh) dcHigh = candles[j].high;
+      if (candles[j].low  < dcLow)  dcLow  = candles[j].low;
+    }
+
+    // Volume average
+    let volSum = 0;
+    for (let j = i - volAvgP; j < i; j++) volSum += Math.max(candles[j].volume || 1, 1);
+    const volAvg = volSum / volAvgP;
+    const vol    = Math.max(bar.volume || 1, 1);
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason = hitTP ? 'tp' : 'sl';
+        const exitPx = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position && bodyBuf.length >= 20) {
+      const bodyRank   = percentileRank(bodyBuf, body);
+      const volSurge   = vol > volAvg * 1.3;
+      const strongBody = bodyRank >= bodyPctTh;
+      const atr = atrAt(i);
+
+      if (bar.close > dcHigh && bar.close > bar.open && strongBody && volSurge) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (bar.close < dcLow && bar.close < bar.open && strongBody && volSurge) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── RS1 Strategy — Rate-of-Change Divergence Reversal ────────────────────────
+// Detects classical price/momentum divergence using ROC (Rate of Change).
+// Bullish divergence: price forms a lower-low, but ROC is HIGHER than previous low.
+//   → bears are losing momentum → expect reversal up.
+// Bearish divergence: price forms a higher-high, but ROC is LOWER than previous high.
+//   → bulls are exhausted → expect reversal down.
+// Swing detection uses a 5-bar lookback for local highs/lows.
+function runRS1Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const rocPeriod = Math.max(3, Math.round(Number(bot.threshold || 14)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.3));
+  const swingWin  = 5; // bars each side for local extremes
+
+  function calcRoc(i) {
+    if (i < rocPeriod) return 0;
+    const prev = candles[i - rocPeriod].close;
+    return prev > 0 ? (candles[i].close - prev) / prev * 100 : 0;
+  }
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Scan previous confirmed swing lows for divergence lookback
+  const swingLows  = [];  // { priceIdx, price, roc }
+  const swingHighs = [];  // { priceIdx, price, roc }
+  let position = null;
+  const warmup = rocPeriod + swingWin * 2 + 5;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+    const roc = calcRoc(i);
+
+    // Confirm pivot at (i - swingWin)
+    const pivIdx = i - swingWin;
+    if (pivIdx >= swingWin) {
+      const pivot = candles[pivIdx];
+      let isSwingLow = true, isSwingHigh = true;
+      for (let k = pivIdx - swingWin; k <= pivIdx + swingWin; k++) {
+        if (k === pivIdx) continue;
+        if (candles[k].low  <= pivot.low)  isSwingLow  = false;
+        if (candles[k].high >= pivot.high) isSwingHigh = false;
+      }
+      const pivRoc = calcRoc(pivIdx);
+      if (isSwingLow)  { swingLows.push({ idx: pivIdx, price: pivot.low,   roc: pivRoc }); if (swingLows.length  > 10) swingLows.shift(); }
+      if (isSwingHigh) { swingHighs.push({ idx: pivIdx, price: pivot.high, roc: pivRoc }); if (swingHighs.length > 10) swingHighs.shift(); }
+    }
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        const reason = hitTP ? 'tp' : 'sl';
+        const exitPx = hitTP ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? (exitPx - position.entry) / position.entry * 100
+          : (position.entry - exitPx) / position.entry * 100;
+        tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: exitPx, pl, reason, entryTime: candles[position.entryIndex].time, exitTime: bar.time, entryIndex: position.entryIndex, exitIndex: i });
+        markers.push({ time: bar.time, position: position.dir === 'long' ? 'aboveBar' : 'belowBar', color: hitTP ? '#27d3c5' : '#f7bc52', shape: 'circle', text: hitTP ? 'TP' : 'SL', size: 0.8 });
+        position = null;
+      }
+    }
+
+    if (!position && swingLows.length >= 2 && swingHighs.length >= 2) {
+      const atr = atrAt(i);
+      // Bullish divergence: current bar is a new low but ROC is improving
+      const prevL = swingLows[swingLows.length - 1];
+      const prevH = swingHighs[swingHighs.length - 1];
+
+      if (bar.low < prevL.price && roc > prevL.roc && roc < 0) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (bar.high > prevH.price && roc < prevH.roc && roc > 0) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
   if (bot.strategy === 'b5s') return runB5SStrategy(candles, bot);
   if (bot.strategy === 'ai1') return runAI1Strategy(candles, bot);
   if (bot.strategy === 'ai2') return runAI2Strategy(candles, bot);
   if (bot.strategy === 'ai3') return runAI3Strategy(candles, bot);
+  if (bot.strategy === 'vw1') return runVW1Strategy(candles, bot);
+  if (bot.strategy === 'kc1') return runKC1Strategy(candles, bot);
+  if (bot.strategy === 'dv1') return runDV1Strategy(candles, bot);
+  if (bot.strategy === 'rs1') return runRS1Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -2731,8 +3159,17 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isAI2 = bot.strategy === 'ai2';
   const isAI3 = bot.strategy === 'ai3';
   const isAI  = isAI1 || isAI2 || isAI3;
+  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1';
 
-  const aiThresholdLabel = isAI1 ? 'RSI' : isAI2 ? 'Squeeze%' : 'Stoch';
+  const atrThLabel =
+    isAI1              ? 'RSI'
+    : isAI2            ? 'Squeeze%'
+    : isAI3            ? 'Stoch'
+    : bot.strategy === 'vw1' ? 'Dev%'
+    : bot.strategy === 'kc1' ? 'EMA'
+    : bot.strategy === 'dv1' ? 'DC'
+    : bot.strategy === 'rs1' ? 'ROC'
+    : 'Th';
 
   container.innerHTML = candidates
     .slice(0, 6)
@@ -2742,8 +3179,8 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
         const tpPart = candidate.tpType === 'dynamic' ? 'Dyn TP' : `TP ${candidate.tp}% SL ${candidate.sl}%`;
         const tradesPart = isB5S ? ` • ${candidate.maxTrades ?? 3}T` : '';
         paramStr = `Swing ${candidate.threshold} • ${candidate.bosConfType === 'wicks' ? 'Wicks' : 'Close'} • ${tpPart}${tradesPart}`;
-      } else if (isAI) {
-        paramStr = `TP ${candidate.tp}× ATR • SL ${candidate.sl}× ATR • ${aiThresholdLabel} ${candidate.threshold}`;
+      } else if (isATR) {
+        paramStr = `TP ${candidate.tp}× ATR • SL ${candidate.sl}× ATR • ${atrThLabel} ${candidate.threshold}`;
       } else {
         paramStr = `TP ${candidate.tp}% • SL ${candidate.sl}% • Th ${candidate.threshold}`;
       }
@@ -2785,8 +3222,8 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       feedback.className = 'param-feedback good';
       const label = isBOS
         ? `Swing ${candidate.threshold} / ${candidate.bosConfType} / ${candidate.tpType}${isB5S ? ` / ${candidate.maxTrades ?? 3}T` : ''}`
-        : isAI
-        ? `TP ${candidate.tp}× / SL ${candidate.sl}× / ${aiThresholdLabel} ${candidate.threshold}`
+      : isATR
+        ? `TP ${candidate.tp}× / SL ${candidate.sl}× / ${atrThLabel} ${candidate.threshold}`
         : `TP ${candidate.tp}% / SL ${candidate.sl}% / Th ${candidate.threshold}`;
       feedback.textContent = `Applied candidate #${idx + 1}: ${label}.`;
       applyParamsToChart(bot);
@@ -3138,6 +3575,66 @@ function setupChartParameterLab(bot) {
           }
         }
       }
+    } else if (bot.strategy === 'vw1') {
+      // VWAP reversion: TP/SL multipliers + deviation percentile trigger
+      const tpCandidates = [1.0, 1.4, 1.8, 2.2, 2.8];
+      const slCandidates = [0.5, 0.7, 0.9, 1.2, 1.6];
+      const thCandidates = [10, 15, 20, 25, 30]; // deviation percentile
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'kc1') {
+      // Keltner breakout: TP/SL multipliers + EMA period for channel centre
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 3.5];
+      const slCandidates = [0.7, 0.9, 1.1, 1.4, 1.8];
+      const thCandidates = [10, 14, 20, 30, 50]; // EMA period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'dv1') {
+      // Donchian velocity: TP/SL multipliers + Donchian period
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
+      const slCandidates = [0.7, 0.9, 1.1, 1.5, 2.0];
+      const thCandidates = [10, 15, 20, 30, 50]; // Donchian period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'rs1') {
+      // ROC divergence: TP/SL multipliers + ROC period
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
+      const slCandidates = [0.8, 1.0, 1.3, 1.7, 2.2];
+      const thCandidates = [7, 10, 14, 18, 21]; // ROC period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
     } else {
       const tpCandidates = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.2, 3.0];
       const slCandidates = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 9.0, 12.0];
@@ -3157,8 +3654,6 @@ function setupChartParameterLab(bot) {
     candidates.sort((a, b) => b.score - a.score);
 
     // ── Genetic refinement pass ──────────────────────────────────────────────
-    // Take top 5 grid-search winners, mutate numeric params ±1 step each
-    // direction and re-evaluate — finds finer optima between grid points.
     feedback.textContent = 'Refining top candidates…';
     const tpStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.1 : 0.2;
     const slStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.25 : 0.5;
@@ -3218,12 +3713,12 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
-    const isAIBest  = bot.strategy === 'ai1' || bot.strategy === 'ai2' || bot.strategy === 'ai3';
-    const aiThLbl   = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : 'Stoch';
+    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1'].includes(bot.strategy);
+    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : 'ROC';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
-      : isAIBest
-      ? `TP ${best.tp}× / SL ${best.sl}× / ${aiThLbl} ${best.threshold}`
+      : isATRBest
+      ? `TP ${best.tp}× / SL ${best.sl}× / ${atrThLblB} ${best.threshold}`
       : `TP ${best.tp}% / SL ${best.sl}% / Th ${best.threshold}`;
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
