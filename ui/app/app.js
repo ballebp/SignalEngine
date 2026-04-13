@@ -755,7 +755,7 @@ async function fetchKlineChunk(candidate, pair, interval, limit, endTimeMs = nul
   return payload;
 }
 
-async function fetchBinanceKlines(bot, limit = 500, preferredMarketType = null) {
+async function fetchBinanceKlines(bot, limit = 500, preferredMarketType = null, fromEndTimeMs = null) {
   const pair = toBinanceSymbol(bot.symbol);
   const interval = String(bot.timeframe || '5m').toLowerCase();
   const target = Math.max(60, Math.min(limit, 12000));
@@ -764,7 +764,7 @@ async function fetchBinanceKlines(bot, limit = 500, preferredMarketType = null) 
   for (const candidate of getMarketCandidates(bot, preferredMarketType)) {
     try {
       const allRows = [];
-      let endTimeMs = null;
+      let endTimeMs = fromEndTimeMs;
 
       while (allRows.length < target) {
         const remaining = target - allRows.length;
@@ -2189,44 +2189,39 @@ function setupReplayControls() {
       const barsPerDayMap = { '1m':1440,'3m':480,'5m':288,'15m':96,'30m':48,'1h':24,'4h':6,'1d':1,'1w':1 };
       const bpd = barsPerDayMap[String(bot.timeframe).toLowerCase()] ?? 96;
       const IDEAL_WINDOW = Math.max(200, bpd * 30); // ~30 days of bars
-      const FETCH = Math.min(IDEAL_WINDOW * 6, 10000); // fetch 6× for wide sampling range
-      // Always re-fetch to guarantee different period each press
-      delete chartState.fullHistoryByBot[bot.id];
+      // Pick a random end time anywhere within the past 2 years so each press
+      // can land in a completely different historical period (not just recent data)
+      const twoYearsMs = 2 * 365 * 24 * 60 * 60 * 1000;
+      const randomEndMs = Date.now() - Math.floor(Math.random() * twoYearsMs);
+      let candles = [], volumes = [];
       try {
-        const market = await fetchBinanceKlines(bot, FETCH, chartState.marketType);
-        chartState.fullHistoryByBot[bot.id] = { candles: market.candles, volumes: market.volumes };
-      } catch {
-        chartState.fullHistoryByBot[bot.id] = {
-          candles: chartState.data?.candles || [],
-          volumes: chartState.data?.volumes || [],
-        };
+        const market = await fetchBinanceKlines(bot, IDEAL_WINDOW, chartState.marketType, randomEndMs);
+        candles = market.candles;
+        volumes = market.volumes;
+      } catch { /* fall through to fallback */ }
+      // If too few bars (pair didn't exist that far back), fall back to most recent data
+      if (candles.length < 50) {
+        try {
+          const market = await fetchBinanceKlines(bot, IDEAL_WINDOW, chartState.marketType);
+          candles = market.candles;
+          volumes = market.volumes;
+        } catch {
+          candles = chartState.data?.candles || [];
+          volumes = chartState.data?.volumes || [];
+        }
       }
-      const full = chartState.fullHistoryByBot[bot.id];
-      const total = full.candles.length;
-      // Cap window to at most 40% of total so there's always a random range
-      const WINDOW = Math.min(IDEAL_WINDOW, Math.max(50, Math.floor(total * 0.4)));
-      let slice, volSlice;
-      if (total <= WINDOW) {
-        slice = full.candles;
-        volSlice = full.volumes;
-      } else {
-        const start = Math.floor(Math.random() * (total - WINDOW));
-        slice = full.candles.slice(start, start + WINDOW);
-        volSlice = full.volumes.slice(start, start + WINDOW);
-      }
-      const pkg = buildReplayPackageFromCandles(slice, volSlice, bot);
+      const pkg = buildReplayPackageFromCandles(candles, volumes, bot);
       chartState.data = { ...pkg, smaData: buildSma(pkg.candles, 20) };
       chartState.replaySignals = pkg.replaySignals;
       chartState.replayEquityTimeline = pkg.replayEquityTimeline;
       chartState.replayIndex = 0;
-      // Show all bars at once
       renderChartControls(bot, pkg.summary);
       setupLayerToggles();
       applyReplayFrame(pkg.candles.length - 1);
       chartState.chart?.timeScale().fitContent();
       // Show date range of sample
-      const from = new Date(slice[0].time * 1000).toLocaleDateString();
-      const to   = new Date(slice[slice.length - 1].time * 1000).toLocaleDateString();
+      const from = new Date(candles[0].time * 1000).toLocaleDateString();
+      const to   = new Date(candles[candles.length - 1].time * 1000).toLocaleDateString();
       const progress = document.getElementById('replay-progress');
       if (progress) progress.textContent = `${from} – ${to} · ${pkg.summary.trades} trades`;
     } finally {
