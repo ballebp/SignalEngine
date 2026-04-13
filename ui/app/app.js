@@ -1968,11 +1968,15 @@ function renderChartControls(activeBot, summary) {
     `<span class="chart-symbol-name">${activeBot.symbol}</span>` +
     `<span class="chart-timeframe-badge">${activeBot.timeframe}</span>`;
 
+  const pfText = Number.isFinite(summary.profitFactor) ? summary.profitFactor.toFixed(2) : '-';
+  const pfTone = Number.isFinite(summary.profitFactor) && summary.profitFactor >= 1 ? 'is-positive' : 'is-negative';
   document.getElementById('chart-perf-strip').innerHTML = [
     ['Win Rate', `${summary.winRate.toFixed(2)}%`, summary.winRate > 50 ? 'is-positive' : 'is-negative'],
     ['Net P/L', formatPercent(summary.netPl), summary.netPl > 0 ? 'is-positive' : 'is-negative'],
     ['Max DD', `${summary.maxDrawdown.toFixed(2)}%`, 'is-negative'],
     ['Trades', String(summary.trades), ''],
+    ['PF', pfText, pfTone],
+    ['W / L', `${summary.wins} / ${summary.losses}`, ''],
   ].map(([label, value, tone]) =>
     `<div class="chart-perf-item">` +
       `<span class="chart-perf-label">${label}</span>` +
@@ -2871,7 +2875,6 @@ function applyHistoryOrLiveFrame() {
   renderChartTradeLog(chartState.data.tradeLog, activeBot);
   renderLiveEquity(currentTime);
   renderReplaySignalFeed(currentTime);
-  renderStrategyStatsBoard();
 }
 
 function startLive(bot) {
@@ -2961,7 +2964,6 @@ function applyReplayFrame(index) {
   renderChartTradeLog(chartState.data.tradeLog, activeBot);
   renderLiveEquity(currentTime);
   renderReplaySignalFeed(currentTime);
-  renderStrategyStatsBoard();
 }
 
 function renderLiveEquity(currentTime) {
@@ -3071,44 +3073,10 @@ function renderReplaySignalFeed(currentTime) {
     .join('');
 }
 
-function renderStrategyStatsBoard() {
-  const board = document.getElementById('strategy-stats-board');
-  if (!board || !chartState.data?.summary) return;
-
-  const summary = chartState.data.summary;
-  const pfText = Number.isFinite(summary.profitFactor) ? summary.profitFactor.toFixed(2) : '-';
-  const rows = [
-    ['Trades', String(summary.trades), ''],
-    ['WR%', `${summary.winRate.toFixed(1)}%`, metricClass(summary.winRate - 50)],
-    ['PF', pfText, summary.profitFactor >= 1 ? 'is-positive' : 'is-negative'],
-    ['P/L%', `${summary.netPl.toFixed(2)}%`, metricClass(summary.netPl)],
-    ['AD%', `${summary.maxDrawdown.toFixed(2)}%`, 'is-negative'],
-    ['Wins / Losses', `${summary.wins} / ${summary.losses}`, ''],
-  ];
-
-  board.innerHTML = `
-    <div class="strategy-stats-header">
-      <div class="strategy-stats-cell">Arbitrage Bot</div>
-      <div class="strategy-stats-cell" style="text-align:right;">Stats</div>
-    </div>
-    ${rows
-      .map(
-        ([label, value, tone]) => `
-          <div class="strategy-stats-row">
-            <div class="strategy-stats-cell strategy-label">${label}</div>
-            <div class="strategy-stats-cell strategy-value ${tone}">${value}</div>
-          </div>
-        `
-      )
-      .join('')}
-  `;
-}
-
 function renderAll() {
   renderBots();
   renderConfigForm();
   renderConfigPreview();
-  renderStrategyStatsBoard();
   refreshTradeRelayPanel();
 }
 
