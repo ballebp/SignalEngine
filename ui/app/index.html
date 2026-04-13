@@ -176,16 +176,7 @@
             <span id="replay-data-source" class="replay-data-source">Source: Sample data</span>
           </div>
         </div>
-        <div class="chart-nav-tools" id="chart-nav-tools">
-          <button class="ghost-button replay-btn" id="chart-pan-left" type="button">Pan Left</button>
-          <button class="ghost-button replay-btn" id="chart-pan-right" type="button">Pan Right</button>
-          <button class="ghost-button replay-btn" id="chart-zoom-in" type="button">Zoom In</button>
-          <button class="ghost-button replay-btn" id="chart-zoom-out" type="button">Zoom Out</button>
-          <button class="ghost-button replay-btn" id="chart-follow-toggle" type="button">Follow Price: Off</button>
-          <button class="ghost-button replay-btn" id="chart-reset-view" type="button">Reset View</button>
-          <button class="ghost-button replay-btn" id="chart-load-more" type="button">Load More History</button>
-          <span class="chart-nav-hint">Tip: Hold Shift + Mouse Wheel for horizontal scroll</span>
-        </div>
+
         <div class="chart-parameter-lab" id="chart-parameter-lab">
           <div class="param-fields">
             <label class="param-field" for="chart-param-symbol">
@@ -251,14 +242,14 @@
             <div class="chart-top-metrics" id="chart-top-metrics"></div>
           </div>
           <div class="chart-main-shell">
-            <aside class="chart-left-tools" aria-hidden="true">
-              <span>+</span>
-              <span>o</span>
-              <span>/</span>
-              <span>-</span>
-              <span>[]</span>
-              <span>T</span>
-              <span>m</span>
+            <aside class="chart-left-tools">
+              <button class="chart-left-btn" id="chart-pan-left"   title="Pan Left">&#9664;</button>
+              <button class="chart-left-btn" id="chart-pan-right"  title="Pan Right">&#9654;</button>
+              <button class="chart-left-btn" id="chart-zoom-in"    title="Zoom In">&#43;</button>
+              <button class="chart-left-btn" id="chart-zoom-out"   title="Zoom Out">&minus;</button>
+              <button class="chart-left-btn" id="chart-follow-toggle" title="Follow Price">&#9678;</button>
+              <button class="chart-left-btn" id="chart-reset-view" title="Reset View">&#8635;</button>
+              <button class="chart-left-btn" id="chart-load-more"  title="Load More History">&#8617;</button>
             </aside>
             <div class="chart-core-area">
               <div class="chart-ohlcv-legend" id="chart-ohlcv-legend"></div>

@@ -949,8 +949,8 @@ function setFollowLive(enabled) {
   chartState.followLive = Boolean(enabled);
   const button = document.getElementById('chart-follow-toggle');
   if (!button) return;
-  button.textContent = `Follow Price: ${chartState.followLive ? 'On' : 'Off'}`;
-  button.classList.toggle('is-live', chartState.followLive);
+  button.title = `Follow Price: ${chartState.followLive ? 'On' : 'Off'}`;
+  button.classList.toggle('is-active', chartState.followLive);
 }
 
 async function loadOlderHistory(bot, bars = 1000) {
