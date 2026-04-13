@@ -520,6 +520,10 @@ function renderConfigForm() {
       renderHero();
       renderBots();
       refreshTradeRelayPanel();
+      if (el.name === 'tpType') {
+        renderConfigForm();
+        return;
+      }
       if (el.name === 'timeframe') {
         delete chartState.importedCandlesByBot[currentBot.id];
         delete chartState.importedSourceByBot[currentBot.id];
