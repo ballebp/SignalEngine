@@ -2284,6 +2284,18 @@ function parseLocaleNumber(rawValue, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function averageSummaries(summaries) {
+  if (!summaries.length) return { netPl: 0, maxDrawdown: 0, winRate: 50, trades: 0, profitFactor: 1 };
+  const n = summaries.length;
+  return {
+    netPl:        summaries.reduce((s, x) => s + x.netPl, 0) / n,
+    maxDrawdown:  summaries.reduce((s, x) => s + x.maxDrawdown, 0) / n,
+    winRate:      summaries.reduce((s, x) => s + x.winRate, 0) / n,
+    trades:       Math.round(summaries.reduce((s, x) => s + x.trades, 0) / n),
+    profitFactor: summaries.reduce((s, x) => s + Math.min(x.profitFactor ?? 1, 20), 0) / n,
+  };
+}
+
 function scoreOptimizationCandidate(summary) {
   const tradeFactor = Math.max(0.2, Math.min(1, summary.trades / 35));
   const pfBoost = Math.min(summary.profitFactor, 5) * 3;
@@ -2579,22 +2591,36 @@ function setupChartParameterLab(bot) {
   };
 
   optimizeButton.onclick = async () => {
-    // Always fetch maximum bars for optimizer so results are based on rich data
     feedback.className = 'param-feedback';
     feedback.textContent = 'Fetching data for optimizer…';
     optimizeButton.disabled = true;
-    let source;
+    // Fetch 4 chunks spread across the past 2 years so the optimizer finds params
+    // that generalise across market conditions rather than fitting recent data only
+    const twoYearsMs = 2 * 365 * 24 * 60 * 60 * 1000;
+    const sources = [];
+    const tryFetch = async (endMs) => {
+      try {
+        const m = await fetchBinanceKlines(bot, 3000, chartState.marketType, endMs);
+        if (m.candles.length >= 100) sources.push({ candles: m.candles, volumes: m.volumes });
+      } catch {}
+    };
     try {
-      const market = await fetchBinanceKlines(bot, 12000, chartState.marketType);
-      source = { candles: market.candles, volumes: market.volumes };
-    } catch {
-      source = chartState.data
-        ? { candles: chartState.data.candles, volumes: chartState.data.volumes }
-        : generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
+      await tryFetch(null); // most recent chunk always included
+      for (let i = 0; i < 3; i++) {
+        const endMs = Date.now() - Math.floor(Math.random() * twoYearsMs);
+        await tryFetch(endMs);
+      }
     } finally {
       optimizeButton.disabled = false;
     }
-    feedback.textContent = `Running optimizer on ${source.candles.length} bars…`;
+    if (!sources.length) {
+      const fb = chartState.data
+        ? { candles: chartState.data.candles, volumes: chartState.data.volumes }
+        : generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
+      sources.push(fb);
+    }
+    const totalBars = sources.reduce((sum, s) => sum + s.candles.length, 0);
+    feedback.textContent = `Optimizing across ${sources.length} periods (${totalBars.toLocaleString()} bars)…`;
     const candidates = [];
 
     if (bot.strategy === 'h9s') {
@@ -2611,9 +2637,9 @@ function setupChartParameterLab(bot) {
             for (const tp of tpVals) {
               for (const sl of slVals) {
                 const testBot = { ...bot, threshold, bosConfType, tpType, tp, sl };
-                const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
-                const score = scoreOptimizationCandidate(pkg.summary);
-                candidates.push({ tp, sl, threshold, bosConfType, tpType, summary: pkg.summary, score });
+                const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+                const score = scoreOptimizationCandidate(avgSummary);
+                candidates.push({ tp, sl, threshold, bosConfType, tpType, summary: avgSummary, score });
               }
             }
           }
@@ -2635,9 +2661,9 @@ function setupChartParameterLab(bot) {
               for (const tp of tpVals) {
                 for (const sl of slVals) {
                   const testBot = { ...bot, threshold, bosConfType, tpType, maxTrades, tp, sl };
-                  const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
-                  const score = scoreOptimizationCandidate(pkg.summary);
-                  candidates.push({ tp, sl, threshold, bosConfType, tpType, maxTrades, summary: pkg.summary, score });
+                  const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+                  const score = scoreOptimizationCandidate(avgSummary);
+                  candidates.push({ tp, sl, threshold, bosConfType, tpType, maxTrades, summary: avgSummary, score });
                 }
               }
             }
@@ -2652,9 +2678,9 @@ function setupChartParameterLab(bot) {
         for (const sl of slCandidates) {
           for (const threshold of thCandidates) {
             const testBot = { ...bot, tp, sl, threshold };
-            const pkg = buildReplayPackageFromCandles(source.candles, source.volumes, testBot);
-            const score = scoreOptimizationCandidate(pkg.summary);
-            candidates.push({ tp, sl, threshold, summary: pkg.summary, score });
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
           }
         }
       }
@@ -2666,7 +2692,7 @@ function setupChartParameterLab(bot) {
     if (!best) {
       feedback.className = 'param-feedback warn';
       feedback.textContent = 'AI optimize could not evaluate candidate sets.';
-      renderOptimizerResults([], bot, tpInput, slInput, thresholdInput, feedback, source);
+      renderOptimizerResults([], bot, tpInput, slInput, thresholdInput, feedback, sources[0]);
       return;
     }
 
@@ -2694,7 +2720,7 @@ function setupChartParameterLab(bot) {
     feedback.className = 'param-feedback good';
     feedback.textContent = `AI best: ${bestLabel} -> ${formatPercent(best.summary.netPl)} net, ${best.summary.maxDrawdown.toFixed(2)}% DD, ${best.summary.winRate.toFixed(2)}% WR.`;
     void saveSettings();
-    renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, source);
+    renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInput, feedback, sources[0]);
     renderHero();
     renderBots();
     renderConfigForm();
