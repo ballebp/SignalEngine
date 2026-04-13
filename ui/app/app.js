@@ -2868,8 +2868,8 @@ function renderLiveEquity(currentTime) {
   if (!points.length) return;
 
   const width = 620;
-  const height = 180;
-  const padding = 14;
+  const height = 64;
+  const padding = 6;
   const minY = Math.min(...points.map((p) => p.equity));
   const maxY = Math.max(...points.map((p) => p.equity));
   const spanY = Math.max(maxY - minY, 0.0001);
@@ -2924,19 +2924,7 @@ function renderLiveEquity(currentTime) {
   stats.innerHTML = `
     <article class="live-stat">
       <span class="mini-label">Equity</span>
-      <strong>${currentEquity.toFixed(2)}</strong>
-    </article>
-    <article class="live-stat">
-      <span class="mini-label">Net P/L</span>
-      <strong class="${metricClass(netPl)}">${formatPercent(netPl)}</strong>
-    </article>
-    <article class="live-stat">
-      <span class="mini-label">Closed / Wins</span>
-      <strong>${closedTrades.length} / ${wins}</strong>
-    </article>
-    <article class="live-stat">
-      <span class="mini-label">Max Drawdown</span>
-      <strong class="is-negative">${maxDd.toFixed(2)}%</strong>
+      <strong class="${metricClass(netPl)}">${currentEquity.toFixed(2)}</strong>
     </article>
   `;
 }

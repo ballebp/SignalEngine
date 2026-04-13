@@ -1540,6 +1540,60 @@ body.is-compact .panel-header h3 {
   font-size: 18px;
 }
 
+.chart-equity-row {
+  padding-top: 4px;
+  border-top: 1px solid rgba(128, 156, 181, 0.1);
+  margin-top: 2px;
+}
+
+.chart-equity-inline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.chart-equity-svg-inline {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(39, 211, 197, 0.06), rgba(39, 211, 197, 0.01)),
+    rgba(4, 11, 18, 0.92);
+  height: 64px;
+  overflow: hidden;
+}
+
+.chart-equity-svg-inline svg {
+  width: 100%;
+  height: 64px;
+  display: block;
+}
+
+.chart-equity-inline .live-equity-stats {
+  min-width: auto;
+  display: flex;
+  gap: 0;
+}
+
+.chart-equity-inline .live-stat {
+  border: none;
+  background: none;
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.chart-equity-inline .live-stat strong {
+  font-size: 14px;
+}
+
+.chart-equity-inline .live-stat .mini-label {
+  margin-bottom: 0;
+}
+
 .live-equity-wrap {
   display: grid;
   grid-template-columns: 1fr auto;
