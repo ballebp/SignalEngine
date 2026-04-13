@@ -528,8 +528,6 @@ function renderConfigForm() {
         return;
       }
       if (el.name === 'timeframe') {
-        delete chartState.importedCandlesByBot[currentBot.id];
-        delete chartState.importedSourceByBot[currentBot.id];
         setupTimeframePills(currentBot);
         const chartTfSelect = document.getElementById('chart-param-timeframe');
         if (chartTfSelect) chartTfSelect.value = el.value;
@@ -702,8 +700,6 @@ const chartState = {
   data: null,
   replaySignals: [],
   replayEquityTimeline: [],
-  importedCandlesByBot: {},
-  importedSourceByBot: {},
   fullHistoryByBot: {},
   showCandles: true,
   showSma: true,
@@ -1588,72 +1584,6 @@ function summarizeTradeLog(tradeLog, candles) {
   };
 }
 
-function parseJsonlCandles(text, bot) {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const rows = lines.map((line, idx) => {
-    try {
-      return JSON.parse(line);
-    } catch {
-      throw new Error(`Invalid JSON on line ${idx + 1}`);
-    }
-  });
-
-  if (!rows.length) {
-    throw new Error('File is empty.');
-  }
-
-  const timeframeMinutes = timeframeToMinutes(bot.timeframe);
-  let fallbackTime = 1744416000;
-  let previousClose = Number(rows[0].close || 0.085);
-  const candles = [];
-  const volumes = [];
-
-  for (const row of rows) {
-    const timestamp = row.timestamp || row.time || row.t;
-    const parsedTime = typeof timestamp === 'number'
-      ? (timestamp > 1e12 ? Math.floor(timestamp / 1000) : Math.floor(timestamp))
-      : (timestamp ? Math.floor(new Date(timestamp).getTime() / 1000) : fallbackTime);
-    const time = Number.isFinite(parsedTime) && parsedTime > 0 ? parsedTime : fallbackTime;
-    fallbackTime = time + timeframeMinutes * 60;
-
-    const close = Number(row.close);
-    const high = Number(row.high);
-    const low = Number(row.low);
-    const open = row.open !== undefined ? Number(row.open) : previousClose;
-    if (![open, high, low, close].every(Number.isFinite)) {
-      continue;
-    }
-
-    const fixedOpen = open;
-    const fixedHigh = Math.max(high, fixedOpen, close);
-    const fixedLow = Math.min(low, fixedOpen, close);
-    const volumeValue = Number(row.volume);
-
-    candles.push({
-      time,
-      open: +fixedOpen.toFixed(6),
-      high: +fixedHigh.toFixed(6),
-      low: +fixedLow.toFixed(6),
-      close: +close.toFixed(6),
-    });
-    volumes.push({
-      time,
-      value: Number.isFinite(volumeValue) ? Math.max(1, volumeValue) : Math.floor(75000 + Math.abs(close - fixedOpen) * 100000000),
-      color: close >= fixedOpen ? 'rgba(45,219,117,0.35)' : 'rgba(255,109,109,0.35)',
-    });
-    previousClose = close;
-  }
-
-  candles.sort((a, b) => a.time - b.time);
-  volumes.sort((a, b) => a.time - b.time);
-
-  if (candles.length < 30) {
-    throw new Error('Need at least 30 bars in JSONL for replay.');
-  }
-
-  return { candles, volumes };
-}
-
 function buildReplaySignals(tradeLog, bot) {
   const signals = [];
   for (const trade of tradeLog) {
@@ -1728,9 +1658,8 @@ async function initChart(botId) {
       chartState.lastFiredByBot[bot.id] = Math.floor(Date.now() / 1000);
     }
   }
-  const imported = chartState.importedCandlesByBot[bot.id];
-  let sourcePayload = imported || generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
-  chartState.sourceLabel = chartState.importedSourceByBot[bot.id] || 'Sample data';
+  let sourcePayload = generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
+  chartState.sourceLabel = 'Sample data';
 
   if (chartState.mode === 'history' || chartState.mode === 'live') {
     try {
@@ -1739,13 +1668,9 @@ async function initChart(botId) {
       chartState.sourceLabel = market.source;
       chartState.marketType = market.marketType || chartState.marketType;
     } catch (error) {
-      if (imported) {
-        chartState.sourceLabel = chartState.importedSourceByBot[bot.id] || 'Imported JSONL';
-      } else {
-        sourcePayload = generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
-        const reason = error instanceof Error ? error.message : 'market feed unavailable';
-        chartState.sourceLabel = `Sample fallback (${reason})`;
-      }
+      sourcePayload = generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
+      const reason = error instanceof Error ? error.message : 'market feed unavailable';
+      chartState.sourceLabel = `Sample fallback (${reason})`;
     }
   }
 
@@ -1909,7 +1834,6 @@ async function initChart(botId) {
   setupChartNavigationTools(bot);
   setupLayerToggles();
   setupReplayControls();
-  setupReplayImport(bot);
   setupChartParameterLab(bot);
   setupChartBotConfigPanel(bot);
 
@@ -1939,8 +1863,6 @@ function setupTimeframePills(bot) {
       const activeBot = state.bots.find((b) => b.id === activeBotId) || state.bots[0];
       if (tf === String(activeBot.timeframe).toLowerCase()) return; // already this TF
       activeBot.timeframe = tf;
-      delete chartState.importedCandlesByBot[activeBot.id];
-      delete chartState.importedSourceByBot[activeBot.id];
       // Sync the param-lab select
       const timeframeInput = document.getElementById('chart-param-timeframe');
       if (timeframeInput) timeframeInput.value = tf;
@@ -2347,34 +2269,6 @@ function applyLevelVisibility() {
   }
 }
 
-function setupReplayImport(bot) {
-  const input = document.getElementById('replay-jsonl-input');
-  const button = document.getElementById('replay-load-jsonl');
-  const source = document.getElementById('replay-data-source');
-  if (!input || !button || !source) return;
-
-  source.textContent = `Source: ${chartState.sourceLabel}`;
-  button.onclick = async () => {
-    const file = input.files && input.files[0];
-    if (!file) {
-      alert('Select a JSONL file first.');
-      return;
-    }
-
-    try {
-      const text = await file.text();
-      const parsed = parseJsonlCandles(text, bot);
-      chartState.importedCandlesByBot[bot.id] = parsed;
-      chartState.importedSourceByBot[bot.id] = file.name;
-      source.textContent = `Source: ${file.name}`;
-      void initChart(bot.id);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to parse JSONL file.';
-      alert(`Could not load replay data: ${message}`);
-    }
-  };
-}
-
 function parseLocaleNumber(rawValue, fallback) {
   const normalized = String(rawValue ?? '').trim().replace(',', '.');
   const parsed = Number(normalized);
@@ -2631,8 +2525,6 @@ function setupChartParameterLab(bot) {
     const activeBot = state.bots.find((b) => b.id === activeBotId) || state.bots[0];
     if (tf === String(activeBot.timeframe).toLowerCase()) return;
     activeBot.timeframe = tf;
-    delete chartState.importedCandlesByBot[activeBot.id];
-    delete chartState.importedSourceByBot[activeBot.id];
     setupTimeframePills(activeBot);
     renderHero(); renderBots(); renderConfigForm(); renderConfigPreview();
     void initChart(activeBot.id);
@@ -2661,8 +2553,6 @@ function setupChartParameterLab(bot) {
     if (isB5S) bot.maxTrades = getMaxTrades();
 
     if (symbolChanged || timeframeChanged) {
-      delete chartState.importedCandlesByBot[bot.id];
-      delete chartState.importedSourceByBot[bot.id];
       delete chartState.fullHistoryByBot[bot.id];
     }
 
@@ -2691,7 +2581,7 @@ function setupChartParameterLab(bot) {
     } catch {
       source = chartState.data
         ? { candles: chartState.data.candles, volumes: chartState.data.volumes }
-        : (chartState.importedCandlesByBot[bot.id] || generateChartBars(bot, Math.max(2000, getDesiredHistoryBars())));
+        : generateChartBars(bot, Math.max(2000, getDesiredHistoryBars()));
     } finally {
       optimizeButton.disabled = false;
     }
