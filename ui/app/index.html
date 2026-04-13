@@ -101,6 +101,29 @@
             </div>
           </section>
 
+          <section class="panel-card">
+            <div class="panel-header">
+              <div><div class="section-kicker">Simulation</div><h3>Slippage &amp; Commission</h3></div>
+            </div>
+            <div class="settings-info-block">
+              <p class="settings-note">Applied to every closed trade in backtest, history and random-sample modes. Round-trip cost = (commission + slippage) × 2.</p>
+              <div class="settings-sim-fields">
+                <div class="sim-field-row">
+                  <label class="mini-label" for="sim-commission">Commission % <span class="sim-field-hint">(per side)</span></label>
+                  <input id="sim-commission" type="number" class="sim-field-input" min="0" max="5" step="0.01" value="0.05">
+                </div>
+                <div class="sim-field-row">
+                  <label class="mini-label" for="sim-slippage">Slippage % <span class="sim-field-hint">(per side)</span></label>
+                  <input id="sim-slippage" type="number" class="sim-field-input" min="0" max="10" step="0.05" value="0.05">
+                </div>
+                <div class="sim-field-row">
+                  <span class="mini-label">Round-trip cost</span>
+                  <span id="sim-roundtrip-label" class="sim-roundtrip-label">0.20%</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
         </div>
       </section>
 

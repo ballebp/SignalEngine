@@ -2058,6 +2058,51 @@ body.is-compact .panel-header h3 {
   color: var(--text);
 }
 
+.settings-sim-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.sim-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sim-field-row .mini-label {
+  min-width: 160px;
+  white-space: nowrap;
+}
+
+.sim-field-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sim-field-input {
+  width: 80px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 4px 7px;
+  text-align: right;
+}
+
+.sim-field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sim-roundtrip-label {
+  font-size: 13px;
+  color: #f7bc52;
+  font-weight: 600;
+}
+
 /* hide old settings elements that no longer exist */
 .settings-bots-section { display: none; }
 

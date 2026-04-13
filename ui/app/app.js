@@ -1633,11 +1633,14 @@ function buildReplaySignals(tradeLog, bot) {
 function buildReplayEquityTimeline(candles, tradeLog) {
   const timeline = [];
   let equity = 100;
+  // Round-trip cost: commission charged on entry + exit, slippage on entry + exit
+  const roundTripCostPct = (simSettings.commission + simSettings.slippage) * 2;
 
   for (const candle of candles) {
     for (const trade of tradeLog) {
       if (trade.exitTime === candle.time && trade.pl !== null) {
-        equity *= 1 + trade.pl / 100;
+        const netPl = trade.pl - roundTripCostPct;
+        equity *= 1 + netPl / 100;
       }
     }
     timeline.push({ time: candle.time, equity: +equity.toFixed(4) });
@@ -3019,6 +3022,27 @@ const SUPABASE_ANON_KEY = 'sb_publishable_4mpeCY3NhZ4Y3VT26Ar7uA_w16L8MEO';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const STORAGE_KEY = 'signal-engine-bots-v1'; // offline fallback
+const SIM_SETTINGS_KEY = 'signal-engine-sim-v1';
+
+// Global simulation cost settings (account-level, not per-bot)
+const simSettings = {
+  commission: 0.05,  // % per side (round-trip = 2×)
+  slippage:   0.05,  // % per side (round-trip = 2×)
+};
+
+function saveSimSettings() {
+  try { localStorage.setItem(SIM_SETTINGS_KEY, JSON.stringify(simSettings)); } catch { /* ignore */ }
+}
+
+function loadSimSettings() {
+  try {
+    const raw = localStorage.getItem(SIM_SETTINGS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.commission === 'number') simSettings.commission = parsed.commission;
+    if (typeof parsed.slippage   === 'number') simSettings.slippage   = parsed.slippage;
+  } catch { /* ignore */ }
+}
 
 function botToRow(bot) {
   return {
@@ -3086,7 +3110,45 @@ function setupSaveButton() {
   // Save button moved — auto-save on every field change via saveSettings()
 }
 
+function setupSimSettings() {
+  const commInput = document.getElementById('sim-commission');
+  const slipInput = document.getElementById('sim-slippage');
+  const rtLabel   = document.getElementById('sim-roundtrip-label');
+  if (!commInput || !slipInput || !rtLabel) return;
+
+  // Populate inputs from persisted values
+  commInput.value = String(simSettings.commission);
+  slipInput.value = String(simSettings.slippage);
+
+  function updateRoundTrip() {
+    const rt = (simSettings.commission + simSettings.slippage) * 2;
+    rtLabel.textContent = rt.toFixed(3) + '%';
+  }
+  updateRoundTrip();
+
+  commInput.addEventListener('change', () => {
+    const v = parseFloat(commInput.value);
+    if (Number.isFinite(v) && v >= 0) {
+      simSettings.commission = v;
+      updateRoundTrip();
+      saveSimSettings();
+      applyParamsToChart(state.bots.find(b => b.id === (chartState.currentBotId || state.selectedBotId)) || state.bots[0]);
+    }
+  });
+
+  slipInput.addEventListener('change', () => {
+    const v = parseFloat(slipInput.value);
+    if (Number.isFinite(v) && v >= 0) {
+      simSettings.slippage = v;
+      updateRoundTrip();
+      saveSimSettings();
+      applyParamsToChart(state.bots.find(b => b.id === (chartState.currentBotId || state.selectedBotId)) || state.bots[0]);
+    }
+  });
+}
+
 // Bootstrap: load settings first, then render
+loadSimSettings();
 loadSavedSettings().then(() => {
   renderAll();
   renderSignalTable();
@@ -3095,6 +3157,7 @@ loadSavedSettings().then(() => {
   setupTradeViewToggle();
   setupTradeRelayTestPanel();
   setupSaveButton();
+  setupSimSettings();
   const refreshBtn = document.getElementById('signal-log-refresh-btn');
   if (refreshBtn) refreshBtn.addEventListener('click', () => renderSignalTable());
   // Wire chart-page collapsibles for TR panel and signal log
