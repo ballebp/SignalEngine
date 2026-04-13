@@ -773,6 +773,185 @@ function runRS1(candles, bot) {
   return signals;
 }
 
+// ── E3 — Range Consolidation Breakout ────────────────────────────────────────
+
+function runE3(candles, bot) {
+  const rangePeriod = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const confirmBars = Math.max(3, Math.round(rangePeriod / 4));
+  const tpMult      = Math.max(0.5, Number(bot.tp || 2.2));
+  const slMult      = Math.max(0.3, Number(bot.sl || 1.0));
+  const volGate     = 1.2;
+  const volAvgP     = 20;
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.012;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.012;
+  }
+
+  const signals = [];
+  const warmup  = rangePeriod + confirmBars + volAvgP + 2;
+  let position  = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+    let upper = -Infinity, lower = Infinity;
+    for (let j = i - rangePeriod; j < i; j++) {
+      if (candles[j].high > upper) upper = candles[j].high;
+      if (candles[j].low  < lower) lower = candles[j].low;
+    }
+    let upperPrev = -Infinity, lowerPrev = Infinity;
+    for (let j = i - rangePeriod - confirmBars; j < i - confirmBars; j++) {
+      if (candles[j].high > upperPrev) upperPrev = candles[j].high;
+      if (candles[j].low  < lowerPrev) lowerPrev = candles[j].low;
+    }
+    const rangeStable = Math.abs(upper - upperPrev) < upper * 0.002 &&
+                        Math.abs(lower - lowerPrev) < lower * 0.002;
+    let volSum = 0;
+    for (let j = i - volAvgP; j < i; j++) volSum += Math.max(candles[j].volume || 1, 1);
+    const volSurge = Math.max(bar.volume || 1, 1) > (volSum / volAvgP) * volGate;
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position && rangeStable && volSurge) {
+      const atr = atrAt(i);
+      if (bar.close > upper) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (bar.close < lower) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
+// ── CV1 — Cumulative Volume Delta ─────────────────────────────────────────────
+
+function runCV1(candles, bot) {
+  const cvdWindow = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.2));
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  function calcCVD(endIdx) {
+    let cvd = 0;
+    for (let j = Math.max(0, endIdx - cvdWindow + 1); j <= endIdx; j++) {
+      const c = candles[j];
+      cvd += c.close >= c.open ? Math.max(c.volume || 1, 1) : -Math.max(c.volume || 1, 1);
+    }
+    return cvd;
+  }
+
+  const signals = [];
+  const warmup  = cvdWindow + 2;
+  let position  = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const cvd  = calcCVD(i);
+    const cvdP = calcCVD(i - 1);
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; }
+    }
+    if (!position) {
+      const atr = atrAt(i);
+      if (cvdP <= 0 && cvd > 0) {
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (cvdP >= 0 && cvd < 0) {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
+// ── CH1 — CHoCH Market Structure Break ───────────────────────────────────────
+
+function runCH1(candles, bot) {
+  const swingWin = Math.max(3, Math.round(Number(bot.threshold || 10)));
+  const tpMult   = Math.max(0.5, Number(bot.tp || 3.0));
+  const slMult   = Math.max(0.3, Number(bot.sl || 1.5));
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Pre-compute confirmed pivots
+  const pivotHighs = [], pivotLows = [];
+  for (let i = swingWin; i < candles.length - swingWin; i++) {
+    let isHigh = true, isLow = true;
+    for (let k = i - swingWin; k <= i + swingWin; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) isHigh = false;
+      if (candles[k].low  <= candles[i].low)  isLow  = false;
+    }
+    if (isHigh) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isLow)  pivotLows.push( { idx: i, price: candles[i].low  });
+  }
+
+  const signals = [];
+  let os = 0, phPtr = 0, plPtr = 0;
+  let lastSwingHigh = null, lastSwingLow = null, position = null;
+  const warmup = swingWin * 2 + 14;
+
+  for (let i = warmup; i < candles.length; i++) {
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + swingWin) {
+      lastSwingHigh = pivotHighs[phPtr++];
+    }
+    while (plPtr < pivotLows.length  && i >= pivotLows[plPtr].idx  + swingWin) {
+      lastSwingLow  = pivotLows[plPtr++];
+    }
+    const bar = candles[i];
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) { signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' }); position = null; os = 0; }
+    }
+    if (!position && lastSwingHigh && lastSwingLow) {
+      const atr = atrAt(i);
+      if (os <= 0 && bar.close > lastSwingHigh.price) {
+        os = 1;
+        position = { dir: 'long', tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG', dir: 'long', kind: 'entry' });
+      } else if (os >= 0 && bar.close < lastSwingLow.price) {
+        os = -1;
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 // ── Signal code builder ───────────────────────────────────────────────────────
 
 function signalCode(bot, event) {
@@ -884,6 +1063,9 @@ export default async function handler(req, res) {
         else if (strategy === 'kc1')  signals = runKC1(candles, bot);
         else if (strategy === 'dv1')  signals = runDV1(candles, bot);
         else if (strategy === 'rs1')  signals = runRS1(candles, bot);
+        else if (strategy === 'e3')   signals = runE3(candles, bot);
+        else if (strategy === 'cv1')  signals = runCV1(candles, bot);
+        else if (strategy === 'ch1')  signals = runCH1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired

@@ -206,6 +206,51 @@ const state = {
       sl: 1.3,       // ATR multiplier for SL
       threshold: 14, // ROC lookback period
     },
+    {
+      id: 'e3-ltc-30m',
+      name: 'E3 / Range Breakout',
+      symbol: 'LTCUSDT',
+      timeframe: '30m',
+      strategy: 'e3',
+      webhookKey: 'E3_LTC',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.2,       // ATR multiplier for TP
+      sl: 1.0,       // ATR multiplier for SL
+      threshold: 20, // range detection period (N bars)
+    },
+    {
+      id: 'cv1-ada-1h',
+      name: 'CV1 / Volume Delta',
+      symbol: 'ADAUSDT',
+      timeframe: '1h',
+      strategy: 'cv1',
+      webhookKey: 'CV1_ADA',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.5,       // ATR multiplier for TP
+      sl: 1.2,       // ATR multiplier for SL
+      threshold: 20, // CVD rolling window (bars)
+    },
+    {
+      id: 'ch1-dot-4h',
+      name: 'CH1 / CHoCH Structure',
+      symbol: 'DOTUSDT',
+      timeframe: '4h',
+      strategy: 'ch1',
+      webhookKey: 'CH1_DOT',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 3.0,       // ATR multiplier for TP
+      sl: 1.5,       // ATR multiplier for SL
+      threshold: 10, // swing detection half-window (bars)
+    },
   ],
   scenarios: [
     {
@@ -2261,6 +2306,302 @@ function runRS1Strategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+// ── E3 Strategy — Range Consolidation Breakout ────────────────────────────────
+// Inspired by E3S (Pine Script): detects when price consolidates in a stable
+// range (highest/lowest unchanged for `confirmBars`) then fires on the first
+// confirmed close breakout, with a volume-surge gate.  Range size drives TP/SL.
+function runE3Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const rangePeriod  = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const confirmBars  = Math.max(3, Math.round(rangePeriod / 4));
+  const tpMult       = Math.max(0.5, Number(bot.tp || 2.2));
+  const slMult       = Math.max(0.3, Number(bot.sl || 1.0));
+  const volGate      = 1.2; // vol must be > avgVol × volGate
+  const volAvgP      = 20;
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.012;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.012;
+  }
+
+  const warmup = rangePeriod + confirmBars + volAvgP + 2;
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar = candles[i];
+
+    // Rolling range
+    let upper = -Infinity, lower = Infinity;
+    for (let j = i - rangePeriod; j < i; j++) {
+      if (candles[j].high > upper) upper = candles[j].high;
+      if (candles[j].low  < lower) lower = candles[j].low;
+    }
+    let upperPrev = -Infinity, lowerPrev = Infinity;
+    for (let j = i - rangePeriod - confirmBars; j < i - confirmBars; j++) {
+      if (candles[j].high > upperPrev) upperPrev = candles[j].high;
+      if (candles[j].low  < lowerPrev) lowerPrev = candles[j].low;
+    }
+
+    const rangeStable = Math.abs(upper - upperPrev) < upper * 0.002 &&
+                        Math.abs(lower - lowerPrev) < lower * 0.002;
+
+    // Volume gate
+    let volSum = 0;
+    for (let j = i - volAvgP; j < i; j++) volSum += Math.max(candles[j].volume || 1, 1);
+    const volAvg   = volSum / volAvgP;
+    const volSurge = Math.max(bar.volume || 1, 1) > volAvg * volGate;
+
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl  = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+      }
+    }
+
+    if (!position && rangeStable && volSurge) {
+      const atr   = atrAt(i);
+      // Bullish breakout: close above upper band
+      if (bar.close > upper) {
+        const entry  = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (bar.close < lower) {
+        // Bearish breakout: close below lower band
+        const entry  = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── CV1 Strategy — Cumulative Volume Delta ────────────────────────────────────
+// Inspired by F10S Slim (Pine Script): tracks cumulative signed volume over a
+// rolling window.  When CVD flips from negative to positive → long; positive to
+// negative → short.  Reflects institutional buying/selling pressure shifts.
+function runCV1Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const cvdWindow = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult    = Math.max(0.5, Number(bot.tp || 2.5));
+  const slMult    = Math.max(0.3, Number(bot.sl || 1.2));
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  function calcCVD(endIdx) {
+    let cvd = 0;
+    for (let j = Math.max(0, endIdx - cvdWindow + 1); j <= endIdx; j++) {
+      const c = candles[j];
+      const vol = Math.max(c.volume || 1, 1);
+      cvd += c.close >= c.open ? vol : -vol;
+    }
+    return cvd;
+  }
+
+  const warmup = cvdWindow + 2;
+  let position = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const cvd  = calcCVD(i);
+    const cvdPrev = calcCVD(i - 1);
+
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl  = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+      }
+    }
+
+    if (!position) {
+      const atr = atrAt(i);
+      // CVD crosses above 0 (sellers → buyers)
+      if (cvdPrev <= 0 && cvd > 0) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (cvdPrev >= 0 && cvd < 0) {
+        // CVD crosses below 0 (buyers → sellers)
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
+// ── CH1 Strategy — CHoCH Market Structure Break ───────────────────────────────
+// Inspired by SP MSI&S (LuxAlgo Pine Script): detects Change of Character by
+// tracking swing highs/lows.  A bullish CHoCH occurs when price was making
+// lower-highs then breaks above the most recent confirmed swing high.
+// A bearish CHoCH occurs when price breaks below the most recent swing low
+// while in an upward structure.  Trades the structure flip immediately.
+function runCH1Strategy(candles, bot) {
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  const swingWin = Math.max(3, Math.round(Number(bot.threshold || 10)));
+  const tpMult   = Math.max(0.5, Number(bot.tp || 3.0));
+  const slMult   = Math.max(0.3, Number(bot.sl || 1.5));
+
+  function atrAt(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Detect confirmed pivot high/low at index (requires swingWin bars on each side)
+  function isPivotHigh(i) {
+    if (i < swingWin || i + swingWin >= candles.length) return false;
+    for (let k = i - swingWin; k <= i + swingWin; k++) {
+      if (k === i) continue;
+      if (candles[k].high >= candles[i].high) return false;
+    }
+    return true;
+  }
+  function isPivotLow(i) {
+    if (i < swingWin || i + swingWin >= candles.length) return false;
+    for (let k = i - swingWin; k <= i + swingWin; k++) {
+      if (k === i) continue;
+      if (candles[k].low <= candles[i].low) return false;
+    }
+    return true;
+  }
+
+  // Pre-compute pivots (offset by swingWin: pivot at idx is confirmed at idx+swingWin)
+  const pivotHighs = []; // { idx, price }
+  const pivotLows  = []; // { idx, price }
+  for (let i = swingWin; i < candles.length - swingWin; i++) {
+    if (isPivotHigh(i)) pivotHighs.push({ idx: i, price: candles[i].high });
+    if (isPivotLow(i))  pivotLows.push( { idx: i, price: candles[i].low  });
+  }
+
+  // os = 1 uptrend (HH/HL), os = -1 downtrend (LH/LL), 0 = undefined
+  let os = 0;
+  let lastSwingHigh = null;
+  let lastSwingLow  = null;
+  let phPtr = 0, plPtr = 0;
+  let position = null;
+
+  const warmup = swingWin * 2 + 14;
+
+  for (let i = warmup; i < candles.length; i++) {
+    // Incorporate any pivots now confirmed (pivot at j confirmed when i >= j + swingWin)
+    while (phPtr < pivotHighs.length && i >= pivotHighs[phPtr].idx + swingWin) {
+      lastSwingHigh = pivotHighs[phPtr];
+      phPtr++;
+    }
+    while (plPtr < pivotLows.length && i >= pivotLows[plPtr].idx + swingWin) {
+      lastSwingLow = pivotLows[plPtr];
+      plPtr++;
+    }
+
+    const bar = candles[i];
+
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl  = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+        os        = 0; // reset structure after trade closes
+      }
+    }
+
+    if (!position && lastSwingHigh && lastSwingLow) {
+      const atr = atrAt(i);
+      // Bullish CHoCH: was bearish (os <= 0), close breaks above last swing high
+      if (os <= 0 && bar.close > lastSwingHigh.price) {
+        os = 1;
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      } else if (os >= 0 && bar.close < lastSwingLow.price) {
+        // Bearish CHoCH: was bullish (os >= 0), close breaks below last swing low
+        os = -1;
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
   if (bot.strategy === 'b5s') return runB5SStrategy(candles, bot);
@@ -2271,6 +2612,9 @@ function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'kc1') return runKC1Strategy(candles, bot);
   if (bot.strategy === 'dv1') return runDV1Strategy(candles, bot);
   if (bot.strategy === 'rs1') return runRS1Strategy(candles, bot);
+  if (bot.strategy === 'e3')  return runE3Strategy(candles, bot);
+  if (bot.strategy === 'cv1') return runCV1Strategy(candles, bot);
+  if (bot.strategy === 'ch1') return runCH1Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -3159,7 +3503,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isAI2 = bot.strategy === 'ai2';
   const isAI3 = bot.strategy === 'ai3';
   const isAI  = isAI1 || isAI2 || isAI3;
-  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1';
+  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1';
 
   const atrThLabel =
     isAI1              ? 'RSI'
@@ -3169,6 +3513,9 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     : bot.strategy === 'kc1' ? 'EMA'
     : bot.strategy === 'dv1' ? 'DC'
     : bot.strategy === 'rs1' ? 'ROC'
+    : bot.strategy === 'e3'  ? 'RangePd'
+    : bot.strategy === 'cv1' ? 'CVD Win'
+    : bot.strategy === 'ch1' ? 'Swing'
     : 'Th';
 
   container.innerHTML = candidates
@@ -3625,6 +3972,51 @@ function setupChartParameterLab(bot) {
       const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
       const slCandidates = [0.8, 1.0, 1.3, 1.7, 2.2];
       const thCandidates = [7, 10, 14, 18, 21]; // ROC period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'e3') {
+      // Range breakout: TP/SL multipliers + range detection period
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 3.5];
+      const slCandidates = [0.6, 0.8, 1.0, 1.3, 1.7];
+      const thCandidates = [10, 15, 20, 30, 40]; // range period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'cv1') {
+      // CVD trend: TP/SL multipliers + CVD rolling window
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
+      const slCandidates = [0.7, 1.0, 1.2, 1.5, 2.0];
+      const thCandidates = [10, 15, 20, 30, 50]; // CVD window
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'ch1') {
+      // CHoCH structure: TP/SL multipliers + swing detection half-window
+      const tpCandidates = [2.0, 2.5, 3.0, 4.0, 5.0];
+      const slCandidates = [0.8, 1.0, 1.5, 2.0, 2.5];
+      const thCandidates = [5, 7, 10, 14, 20]; // swing half-window
       for (const tp of tpCandidates) {
         for (const sl of slCandidates) {
           for (const threshold of thCandidates) {
