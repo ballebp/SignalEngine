@@ -470,8 +470,8 @@ function renderConfigForm() {
     ['tradeRelayWebhookCode', 'TradeRelay Webhook Code (step 1 from bot settings)', bot.tradeRelayWebhookCode || ''],
     ['threshold', isBOS ? 'Swing Size' : 'Threshold', bot.threshold],
     ...(isBOS ? [
-      ['bosConfType', 'Confirm (Wicks / Close)', bot.bosConfType || 'close'],
-      ['tpType', 'TP Type (dynamic / fixed)', bot.tpType || 'dynamic'],
+      ['bosConfType', 'BOS Confirmation', bot.bosConfType || 'close'],
+      ['tpType', 'TP Type', bot.tpType || 'dynamic'],
     ] : []),
     ...(!isBOS || bosFixed ? [
       ['tp', 'Take Profit %', bot.tp],
@@ -496,9 +496,14 @@ function renderConfigForm() {
   configForm.innerHTML = fields
     .map(([key, label, value]) => {
       const wide = key === 'tradeRelayUrl' || key === 'tradeRelayWebhookCode' || key.startsWith('source');
-      if (key === 'timeframe') {
-        const options = TF_OPTIONS.map((tf) =>
-          `<option value="${tf}"${tf === String(value).toLowerCase() ? ' selected' : ''}>${tf}</option>`
+      const SELECT_OPTIONS = {
+        timeframe: TF_OPTIONS,
+        bosConfType: ['close', 'wicks'],
+        tpType: ['dynamic', 'fixed'],
+      };
+      if (SELECT_OPTIONS[key]) {
+        const options = SELECT_OPTIONS[key].map((opt) =>
+          `<option value="${opt}"${opt === String(value) ? ' selected' : ''}>${opt}</option>`
         ).join('');
         return `<div class="field"><label for="field-${key}">${label}</label><select id="field-${key}" name="${key}">${options}</select></div>`;
       }
