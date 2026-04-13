@@ -885,8 +885,8 @@ function setReplayControlsVisible(visible) {
   if (controls) controls.classList.toggle('is-hidden', !visible);
   const rnd = document.getElementById('replay-random-sample');
   const prog = document.getElementById('replay-progress');
-  if (rnd) rnd.style.display = visible ? '' : 'none';
-  if (prog) prog.style.display = visible ? '' : 'none';
+  if (rnd) rnd.style.display = visible ? 'inline-flex' : 'none';
+  if (prog) prog.style.display = visible ? 'inline' : 'none';
 }
 
 function getModeStatusText() {
