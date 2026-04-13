@@ -895,8 +895,16 @@ function getModeStatusText() {
   const minutes = timeframeToMinutes(bot?.timeframe || '5m');
   const totalDays = (bars * minutes) / (60 * 24);
   const daysLabel = totalDays >= 1 ? `${totalDays.toFixed(1)}d` : `${(totalDays * 24).toFixed(1)}h`;
-  if (chartState.mode === 'history') return `History · ${chartState.sourceLabel} · ${bars.toLocaleString()} bars · ${daysLabel}`;
-  return `Live mode · ${chartState.sourceLabel} · ${bars.toLocaleString()} bars · ${daysLabel}`;
+
+  let dateRange = '';
+  const candles = chartState.data?.candles;
+  if (candles?.length >= 2) {
+    const fmt = (ts) => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
+    dateRange = ` · ${fmt(candles[0].time)} → ${fmt(candles[candles.length - 1].time)}`;
+  }
+
+  if (chartState.mode === 'history') return `History · ${chartState.sourceLabel} · ${bars.toLocaleString()} bars · ${daysLabel}${dateRange}`;
+  return `Live mode · ${chartState.sourceLabel} · ${bars.toLocaleString()} bars · ${daysLabel}${dateRange}`;
 }
 
 function setModeStatus(extraText) {
