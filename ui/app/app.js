@@ -890,8 +890,13 @@ function setReplayControlsVisible(visible) {
 }
 
 function getModeStatusText() {
-  if (chartState.mode === 'history') return `History mode · ${chartState.sourceLabel}`;
-  return `Live mode · ${chartState.sourceLabel}`;
+  const bot = state.bots.find((b) => b.id === chartState.currentBotId) || state.bots[0];
+  const bars = chartState.historyBarsTarget || 4000;
+  const minutes = timeframeToMinutes(bot?.timeframe || '5m');
+  const totalDays = (bars * minutes) / (60 * 24);
+  const daysLabel = totalDays >= 1 ? `${totalDays.toFixed(1)}d` : `${(totalDays * 24).toFixed(1)}h`;
+  if (chartState.mode === 'history') return `History · ${chartState.sourceLabel} · ${bars.toLocaleString()} bars · ${daysLabel}`;
+  return `Live mode · ${chartState.sourceLabel} · ${bars.toLocaleString()} bars · ${daysLabel}`;
 }
 
 function setModeStatus(extraText) {
