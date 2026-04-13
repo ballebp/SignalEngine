@@ -2453,19 +2453,57 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
 function setupChartParameterLab(bot) {
   const symbolInput = document.getElementById('chart-param-symbol');
   const timeframeInput = document.getElementById('chart-param-timeframe');
-  const tpInput = document.getElementById('chart-param-tp');
-  const slInput = document.getElementById('chart-param-sl');
-  const thresholdInput = document.getElementById('chart-param-threshold');
+  const botFieldsContainer = document.getElementById('chart-param-bot-fields');
   const applyButton = document.getElementById('chart-apply-params');
   const optimizeButton = document.getElementById('chart-optimize-params');
   const feedback = document.getElementById('chart-param-feedback');
-  if (!symbolInput || !timeframeInput || !tpInput || !slInput || !thresholdInput || !applyButton || !optimizeButton || !feedback) return;
+  if (!symbolInput || !timeframeInput || !botFieldsContainer || !applyButton || !optimizeButton || !feedback) return;
+
+  const isH9S = bot.strategy === 'h9s';
+  const isB5S = bot.strategy === 'b5s';
+  const isBOS = isH9S || isB5S;
+  const bosFixed = isBOS && (bot.tpType || 'dynamic') === 'fixed';
+
+  // Build dynamic bot-specific fields
+  let fieldsHTML = '';
+  fieldsHTML += `<label class="param-field"><span>${isBOS ? 'Swing Size' : 'Threshold'}</span><input id="chart-param-threshold" type="number" step="1" min="1" max="${isBOS ? 500 : 99}" value="${bot.threshold}"></label>`;
+  if (isBOS) {
+    fieldsHTML += `<label class="param-field"><span>BOS Conf.</span><select id="chart-param-bos-conf"><option value="close"${(bot.bosConfType||'close')==='close'?' selected':''}>close</option><option value="wicks"${(bot.bosConfType||'close')==='wicks'?' selected':''}>wicks</option></select></label>`;
+    fieldsHTML += `<label class="param-field"><span>TP Type</span><select id="chart-param-tp-type"><option value="dynamic"${(bot.tpType||'dynamic')==='dynamic'?' selected':''}>dynamic</option><option value="fixed"${(bot.tpType||'dynamic')==='fixed'?' selected':''}>fixed</option></select></label>`;
+  }
+  if (!isBOS || bosFixed) {
+    fieldsHTML += `<label class="param-field"><span>TP %</span><input id="chart-param-tp" type="number" step="0.1" min="0.1" max="25" value="${bot.tp}"></label>`;
+    fieldsHTML += `<label class="param-field"><span>SL %</span><input id="chart-param-sl" type="number" step="0.1" min="0.1" max="40" value="${bot.sl}"></label>`;
+  }
+  if (isB5S) {
+    fieldsHTML += `<label class="param-field"><span>Max Trades</span><input id="chart-param-max-trades" type="number" step="1" min="1" max="10" value="${bot.maxTrades ?? 3}"></label>`;
+  }
+  botFieldsContainer.innerHTML = fieldsHTML;
+
+  // Re-bind tpType change to re-render fields
+  const tpTypeEl = document.getElementById('chart-param-tp-type');
+  if (tpTypeEl) {
+    tpTypeEl.onchange = () => {
+      bot.tpType = tpTypeEl.value;
+      setupChartParameterLab(bot);
+    };
+  }
+  const bosConfEl = document.getElementById('chart-param-bos-conf');
+  if (bosConfEl) bosConfEl.onchange = () => { bot.bosConfType = bosConfEl.value; };
+
+  // Helpers to read current field values
+  const getThreshold = () => Math.max(1, parseLocaleNumber((document.getElementById('chart-param-threshold') || {}).value, bot.threshold));
+  const getTp = () => Math.max(0.1, parseLocaleNumber((document.getElementById('chart-param-tp') || {}).value, bot.tp));
+  const getSl = () => Math.max(0.1, parseLocaleNumber((document.getElementById('chart-param-sl') || {}).value, bot.sl));
+  const getMaxTrades = () => Math.max(1, Math.min(10, parseInt((document.getElementById('chart-param-max-trades') || {}).value || bot.maxTrades || 3, 10)));
+
+  // Convenience refs used by optimizer (need live elements, fetched on demand)
+  const tpInput   = { get value() { return String(bot.tp); }, set value(v) { const el = document.getElementById('chart-param-tp'); if (el) el.value = v; } };
+  const slInput   = { get value() { return String(bot.sl); }, set value(v) { const el = document.getElementById('chart-param-sl'); if (el) el.value = v; } };
+  const thresholdInput = { get value() { return String(bot.threshold); }, set value(v) { const el = document.getElementById('chart-param-threshold'); if (el) el.value = v; } };
 
   symbolInput.value = String(bot.symbol || '');
   timeframeInput.value = String(bot.timeframe || '5m').toLowerCase();
-  tpInput.value = String(bot.tp);
-  slInput.value = String(bot.sl);
-  thresholdInput.value = String(bot.threshold);
 
   timeframeInput.onchange = () => {
     const tf = String(timeframeInput.value || '').trim().toLowerCase();
@@ -2484,9 +2522,9 @@ function setupChartParameterLab(bot) {
   applyButton.onclick = () => {
     const nextSymbol = String(symbolInput.value || bot.symbol).trim().toUpperCase();
     const nextTimeframe = String(timeframeInput.value || bot.timeframe).trim();
-    const nextTp = Math.max(0.1, parseLocaleNumber(tpInput.value, bot.tp));
-    const nextSl = Math.max(0.1, parseLocaleNumber(slInput.value, bot.sl));
-    const nextThreshold = Math.max(1, Math.min(99, parseLocaleNumber(thresholdInput.value, bot.threshold)));
+    const nextTp = getTp();
+    const nextSl = getSl();
+    const nextThreshold = getThreshold();
     const symbolChanged = nextSymbol && nextSymbol !== bot.symbol;
     const timeframeChanged = nextTimeframe && nextTimeframe !== bot.timeframe;
 
@@ -2495,6 +2533,13 @@ function setupChartParameterLab(bot) {
     bot.tp = +nextTp.toFixed(2);
     bot.sl = +nextSl.toFixed(2);
     bot.threshold = Math.round(nextThreshold);
+    if (isBOS) {
+      const bcEl = document.getElementById('chart-param-bos-conf');
+      if (bcEl) bot.bosConfType = bcEl.value;
+      const ttEl = document.getElementById('chart-param-tp-type');
+      if (ttEl) bot.tpType = ttEl.value;
+    }
+    if (isB5S) bot.maxTrades = getMaxTrades();
 
     if (symbolChanged || timeframeChanged) {
       delete chartState.importedCandlesByBot[bot.id];
@@ -2503,7 +2548,10 @@ function setupChartParameterLab(bot) {
     }
 
     feedback.className = 'param-feedback good';
-    feedback.textContent = `Applied ${bot.symbol} ${bot.timeframe}, TP ${bot.tp}%, SL ${bot.sl}%, threshold ${bot.threshold}. Replay + performance updated.`;
+    const applied = isBOS
+      ? `${bot.symbol} ${bot.timeframe}, Swing ${bot.threshold}, ${bot.bosConfType}, ${bot.tpType}${isB5S ? `, ${bot.maxTrades}T` : ''}${(bot.tpType==='fixed') ? `, TP ${bot.tp}% SL ${bot.sl}%` : ''}`
+      : `${bot.symbol} ${bot.timeframe}, TP ${bot.tp}%, SL ${bot.sl}%, threshold ${bot.threshold}`;
+    feedback.textContent = `Applied: ${applied}. Replay + performance updated.`;
     void saveSettings();
     renderHero();
     renderBots();

@@ -1180,6 +1180,10 @@ body.is-compact .panel-header h3 {
   flex-wrap: wrap;
 }
 
+#chart-param-bot-fields {
+  display: contents;
+}
+
 .param-field {
   display: grid;
   gap: 6px;
