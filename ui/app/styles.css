@@ -2138,6 +2138,31 @@ body.is-compact .panel-header h3 {
 .toggle-switch input:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
 .toggle-switch input:checked + .toggle-track::after { transform: translateX(16px); background: #fff; }
 
+.cron-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.cron-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cron-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cron-dot.ok    { background: #2ddb75; }
+.cron-dot.error { background: #ff6d6d; }
+.cron-dot.idle  { background: var(--border); }
+
 /* hide old settings elements that no longer exist */
 .settings-bots-section { display: none; }
 

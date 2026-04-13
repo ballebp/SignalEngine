@@ -3259,6 +3259,57 @@ function setupAiGateSettings() {
   });
 }
 
+async function refreshCronStatus() {
+  const list = document.getElementById('cron-status-list');
+  if (!list) return;
+  list.innerHTML = '<span class="sim-field-hint">Loading…</span>';
+  try {
+    const { data, error } = await db.from('cron_state').select('*');
+    if (error || !data || !data.length) {
+      list.innerHTML = '<span class="sim-field-hint">No cron runs recorded yet — worker hasn\'t fired or env vars not configured.</span>';
+      return;
+    }
+    list.innerHTML = data.map(row => {
+      const dot = row.last_status === 'ok' ? 'ok' : row.last_status === 'error' ? 'error' : 'idle';
+      const when = row.last_run ? new Date(row.last_run).toLocaleString() : 'never';
+      const bot  = state.bots.find(b => b.id === row.bot_id);
+      const name = bot ? bot.name : row.bot_id;
+      return `<div class="cron-status-row">
+        <span class="cron-dot ${dot}"></span>
+        <span><strong>${name}</strong> — ${row.last_message || row.last_status} <span style="opacity:.5">(${when})</span></span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = `<span class="sim-field-hint" style="color:#ff6d6d">Error loading cron state: ${e.message}</span>`;
+  }
+}
+
+async function syncAiGateToServer() {
+  const syncStatus = document.getElementById('cron-sync-status');
+  if (syncStatus) syncStatus.textContent = 'Syncing…';
+  try {
+    await db.from('cron_settings').upsert([
+      { key: 'ai_gate_enabled',   value: String(aiGateSettings.enabled) },
+      { key: 'ai_gate_threshold', value: String(aiGateSettings.threshold) },
+      // Note: API key is NOT synced to Supabase — set OPENAI_API_KEY as a Vercel env var
+    ]);
+    if (syncStatus) { syncStatus.textContent = 'Synced ✓'; syncStatus.style.color = '#2ddb75'; }
+  } catch (e) {
+    if (syncStatus) { syncStatus.textContent = `Failed: ${e.message}`; syncStatus.style.color = '#ff6d6d'; }
+  }
+}
+
+function setupCronStatusPanel() {
+  const refreshBtn = document.getElementById('cron-refresh-btn');
+  const syncBtn    = document.getElementById('cron-sync-ai-btn');
+  if (refreshBtn) refreshBtn.addEventListener('click', refreshCronStatus);
+  if (syncBtn)    syncBtn.addEventListener('click', syncAiGateToServer);
+  // Auto-load on settings view open
+  document.querySelector('[data-view="settings"]')?.addEventListener('click', () => {
+    setTimeout(refreshCronStatus, 100);
+  });
+}
+
 function setupSaveButton() {
   // Save button moved — auto-save on every field change via saveSettings()
 }
@@ -3313,6 +3364,7 @@ loadSavedSettings().then(() => {
   setupSaveButton();
   setupSimSettings();
   setupAiGateSettings();
+  setupCronStatusPanel();
   const refreshBtn = document.getElementById('signal-log-refresh-btn');
   if (refreshBtn) refreshBtn.addEventListener('click', () => renderSignalTable());
   // Wire chart-page collapsibles for TR panel and signal log

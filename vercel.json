@@ -2,5 +2,11 @@
   "buildCommand": null,
   "outputDirectory": "ui/app",
   "installCommand": null,
-  "framework": null
+  "framework": null,
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "* * * * *"
+    }
+  ]
 }

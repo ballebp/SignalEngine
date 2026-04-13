@@ -158,6 +158,37 @@
             </div>
           </section>
 
+          <section class="panel-card">
+            <div class="panel-header">
+              <div><div class="section-kicker">Headless Worker</div><h3>Background Cron Status</h3></div>
+            </div>
+            <div class="settings-info-block">
+              <p class="settings-note">A Vercel serverless function runs every minute to check for signals and fire TradeRelay — even when this tab is closed. Configure env vars in your Vercel project dashboard.</p>
+              <div class="settings-sim-fields">
+                <div class="sim-field-row">
+                  <span class="mini-label">Required env vars</span>
+                  <span class="sim-field-hint"><code>SUPABASE_URL</code> · <code>SUPABASE_SERVICE_KEY</code> · <code>CRON_SECRET</code></span>
+                </div>
+                <div class="sim-field-row">
+                  <span class="mini-label">Optional</span>
+                  <span class="sim-field-hint"><code>OPENAI_API_KEY</code> (for server-side AI gate)</span>
+                </div>
+                <div class="sim-field-row">
+                  <span class="mini-label">Schedule</span>
+                  <span class="sim-field-hint">Every 1 minute · <code>/api/cron</code></span>
+                </div>
+                <div class="sim-field-row">
+                  <button class="ghost-button" id="cron-refresh-btn" type="button">Refresh status</button>
+                </div>
+                <div id="cron-status-list" class="cron-status-list"></div>
+              </div>
+              <div class="sim-field-row" style="margin-top:12px">
+                <button class="ghost-button" id="cron-sync-ai-btn" type="button">Sync AI gate settings → server</button>
+                <span id="cron-sync-status" class="sim-field-hint" style="margin-left:8px"></span>
+              </div>
+            </div>
+          </section>
+
         </div>
       </section>
 
