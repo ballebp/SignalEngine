@@ -1298,6 +1298,71 @@ function runSM1(candles, bot) {
   return signals;
 }
 
+function runST1(candles, bot) {
+  const stPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
+  const stFactor = 3.0;
+  const slFactor = Math.max(0.5, Number(bot.sl  || 1.4));
+  const tpMult   = Math.max(0.5, Number(bot.tp  || 2.0));
+
+  function calcATR(i) {
+    if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - stPeriod + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  const stDir     = new Array(candles.length).fill(1);
+  const upperBand = new Array(candles.length).fill(0);
+  const lowerBand = new Array(candles.length).fill(0);
+  for (let i = 0; i < candles.length; i++) {
+    const atr = calcATR(i);
+    const hl2 = (candles[i].high + candles[i].low) / 2;
+    const rawUB = hl2 + stFactor * atr;
+    const rawLB = hl2 - stFactor * atr;
+    if (i === 0) { upperBand[i] = rawUB; lowerBand[i] = rawLB; stDir[i] = 1; continue; }
+    const prevClose = candles[i - 1].close;
+    upperBand[i] = rawUB < upperBand[i-1] || prevClose > upperBand[i-1] ? rawUB : upperBand[i-1];
+    lowerBand[i] = rawLB > lowerBand[i-1] || prevClose < lowerBand[i-1] ? rawLB : lowerBand[i-1];
+    const prevDir = stDir[i - 1];
+    if (prevDir === 1)  stDir[i] = candles[i].close > upperBand[i] ? -1 : 1;
+    else                stDir[i] = candles[i].close < lowerBand[i] ?  1 : -1;
+  }
+
+  const signals = [];
+  let position = null;
+  const warmup = stPeriod * 2;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const dist = calcATR(i) * slFactor;
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' });
+        position = null;
+      }
+    }
+    if (!position) {
+      const prevDir = stDir[i - 1];
+      const curDir  = stDir[i];
+      if (prevDir === 1 && curDir === -1) {
+        const entry = bar.close;
+        position = { dir: 'long',  tp: entry + dist * tpMult, sl: entry - dist, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG',  dir: 'long',  kind: 'entry' });
+      } else if (prevDir === -1 && curDir === 1) {
+        const entry = bar.close;
+        position = { dir: 'short', tp: entry - dist * tpMult, sl: entry + dist, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+    }
+  }
+  return signals;
+}
+
 function runMN1(candles, bot) {
   const swingSize = Math.max(3, Math.round(Number(bot.threshold || 25)));
   const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
@@ -1515,6 +1580,7 @@ export default async function handler(req, res) {
         else if (strategy === 'fg1')  signals = runFG1(candles, bot);
         else if (strategy === 'sm1')  signals = runSM1(candles, bot);
         else if (strategy === 'mn1')  signals = runMN1(candles, bot);
+        else if (strategy === 'st1')  signals = runST1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired

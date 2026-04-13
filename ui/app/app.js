@@ -326,6 +326,21 @@ const state = {
       sl: 1.0,       // dist multiplier for SL
       threshold: 25, // swing pivot window (bars each side)
     },
+    {
+      id: 'st1-near-4h',
+      name: 'ST1 / SuperTrend Flip',
+      symbol: 'NEARUSDT',
+      timeframe: '4h',
+      strategy: 'st1',
+      webhookKey: 'ST1_NEAR',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.0,       // RR ratio (TP = entry ± ATR×sl×tp)
+      sl: 1.4,       // ATR factor for SL/dist sizing
+      threshold: 14, // SuperTrend ATR period
+    },
   ],
   scenarios: [
     {
@@ -3187,6 +3202,96 @@ function runSM1Strategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+function runST1Strategy(candles, bot) {
+  const stPeriod = Math.max(5, Math.round(Number(bot.threshold || 14)));
+  const stFactor = 3.0;
+  const slFactor = Math.max(0.5, Number(bot.sl  || 1.4));
+  const tpMult   = Math.max(0.5, Number(bot.tp  || 2.0));
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  function calcATR(i) {
+    if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - stPeriod + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  // Pre-compute SuperTrend direction (+1 = bearish above price, -1 = bullish below price)
+  const stDir   = new Array(candles.length).fill(1);
+  const upperBand = new Array(candles.length).fill(0);
+  const lowerBand = new Array(candles.length).fill(0);
+  for (let i = 0; i < candles.length; i++) {
+    const atr = calcATR(i);
+    const hl2 = (candles[i].high + candles[i].low) / 2;
+    const rawUB = hl2 + stFactor * atr;
+    const rawLB = hl2 - stFactor * atr;
+    if (i === 0) { upperBand[i] = rawUB; lowerBand[i] = rawLB; stDir[i] = 1; continue; }
+    const prevClose = candles[i - 1].close;
+    upperBand[i] = rawUB < upperBand[i-1] || prevClose > upperBand[i-1] ? rawUB : upperBand[i-1];
+    lowerBand[i] = rawLB > lowerBand[i-1] || prevClose < lowerBand[i-1] ? rawLB : lowerBand[i-1];
+    const prevDir = stDir[i - 1];
+    if (prevDir === 1)  stDir[i] = candles[i].close > upperBand[i] ? -1 : 1;
+    else                stDir[i] = candles[i].close < lowerBand[i] ?  1 : -1;
+  }
+
+  let position = null;
+  const warmup = stPeriod * 2;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const dist = calcATR(i) * slFactor;
+
+    // ── Exit management ──
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+      }
+    }
+
+    // ── Entry: SuperTrend direction flip ──
+    if (!position) {
+      const prevDir = stDir[i - 1];
+      const curDir  = stDir[i];
+      // Bullish flip: bearish (1) → bullish (-1)
+      if (prevDir === 1 && curDir === -1) {
+        const entry = bar.close;
+        position = { dir: 'long', entry, tp: entry + dist * tpMult, sl: entry - dist, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+      }
+      // Bearish flip: bullish (-1) → bearish (1)
+      else if (prevDir === -1 && curDir === 1) {
+        const entry = bar.close;
+        position = { dir: 'short', entry, tp: entry - dist * tpMult, sl: entry + dist, entryIndex: i, entryTime: bar.time };
+        tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+        markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runMN1Strategy(candles, bot) {
   const swingSize = Math.max(3, Math.round(Number(bot.threshold || 25)));
   const tpMult    = Math.max(0.5, Number(bot.tp || 2.0));
@@ -3343,6 +3448,7 @@ function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'fg1') return runFG1Strategy(candles, bot);
   if (bot.strategy === 'sm1') return runSM1Strategy(candles, bot);
   if (bot.strategy === 'mn1') return runMN1Strategy(candles, bot);
+  if (bot.strategy === 'st1') return runST1Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -4330,7 +4436,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isAI2 = bot.strategy === 'ai2';
   const isAI3 = bot.strategy === 'ai3';
   const isAI  = isAI1 || isAI2 || isAI3;
-  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1' || bot.strategy === 'fg1' || bot.strategy === 'sm1' || bot.strategy === 'mn1';
+  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1' || bot.strategy === 'fg1' || bot.strategy === 'sm1' || bot.strategy === 'mn1' || bot.strategy === 'st1';
 
   const atrThLabel =
     isAI1              ? 'RSI'
@@ -4348,6 +4454,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     : bot.strategy === 'fg1' ? 'CVD Len'
     : bot.strategy === 'sm1' ? 'Swing'
     : bot.strategy === 'mn1' ? 'Swing'
+    : bot.strategy === 'st1' ? 'ST Pd'
     : 'Th';
 
   container.innerHTML = candidates
@@ -4938,8 +5045,8 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
-    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1','fg1','sm1','mn1'].includes(bot.strategy);
-    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : bot.strategy === 'fg1' ? 'CVD Len' : bot.strategy === 'sm1' ? 'Swing' : bot.strategy === 'mn1' ? 'Swing' : 'Th';
+    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1','fg1','sm1','mn1','st1'].includes(bot.strategy);
+    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : bot.strategy === 'fg1' ? 'CVD Len' : bot.strategy === 'sm1' ? 'Swing' : bot.strategy === 'mn1' ? 'Swing' : bot.strategy === 'st1' ? 'ST Pd' : 'Th';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
       : isATRBest
