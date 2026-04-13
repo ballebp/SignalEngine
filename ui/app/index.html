@@ -217,6 +217,22 @@
           <div class="param-feedback" id="chart-param-feedback">Adjust values and apply to re-run replay performance.</div>
           <div class="optimizer-results" id="optimizer-results"></div>
         </div>
+        <section class="chart-collapsible is-collapsed" id="chart-bot-config-panel">
+          <div class="chart-collapsible-head">
+            <div>
+              <div class="section-kicker">Bot Settings</div>
+              <h3 id="chart-bot-config-title">Bot Configuration</h3>
+            </div>
+            <button class="ghost-button replay-btn" id="toggle-bot-config" type="button" aria-expanded="false">Expand</button>
+          </div>
+          <div class="chart-bot-config-body">
+            <div class="chart-bot-config-fields" id="chart-bot-config-fields"></div>
+            <div class="chart-bot-config-preview">
+              <div class="section-kicker" style="margin-bottom:6px">Webhook Config JSON</div>
+              <pre class="config-preview-inline" id="chart-bot-config-json"></pre>
+            </div>
+          </div>
+        </section>
         <div class="chart-wrapper">
           <div class="chart-binance-topbar">
             <div class="chart-time-pills" id="chart-time-pills">

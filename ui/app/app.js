@@ -1907,6 +1907,7 @@ async function initChart(botId) {
   setupReplayControls();
   setupReplayImport(bot);
   setupChartParameterLab(bot);
+  setupChartBotConfigPanel(bot);
 
   setReplayControlsVisible(chartState.mode === 'history');
   applyHistoryOrLiveFrame();
@@ -1950,9 +1951,11 @@ function setupTimeframePills(bot) {
 
 function renderChartControls(activeBot, summary) {
   const tabs = document.getElementById('chart-bot-tabs');
-  tabs.innerHTML = state.bots.map((bot) =>
-    `<button class="chart-bot-tab ${bot.id === activeBot.id ? 'is-active' : ''}" data-bot-id="${bot.id}">${bot.name}</button>`
-  ).join('');
+  tabs.innerHTML = state.bots.map((bot) => {
+    const isLive = !!chartState.autoSignalByBot[bot.id];
+    const liveClass = isLive ? 'is-live' : 'is-off';
+    return `<button class="chart-bot-tab ${bot.id === activeBot.id ? 'is-active' : ''} ${liveClass}" data-bot-id="${bot.id}">${bot.name}</button>`;
+  }).join('');
   tabs.querySelectorAll('[data-bot-id]').forEach((btn) => {
     btn.addEventListener('click', () => requestAnimationFrame(() => initChart(btn.dataset.botId)));
   });
@@ -2447,6 +2450,114 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
       renderConfigPreview();
       void initChart(bot.id);
     });
+  });
+}
+
+function setupChartBotConfigPanel(bot) {
+  const panel = document.getElementById('chart-bot-config-panel');
+  const toggleBtn = document.getElementById('toggle-bot-config');
+  const fieldsEl = document.getElementById('chart-bot-config-fields');
+  const jsonEl = document.getElementById('chart-bot-config-json');
+  const titleEl = document.getElementById('chart-bot-config-title');
+  if (!panel || !toggleBtn || !fieldsEl || !jsonEl) return;
+
+  if (titleEl) titleEl.textContent = bot.name;
+
+  const isH9S = bot.strategy === 'h9s';
+  const isB5S = bot.strategy === 'b5s';
+  const isBOS = isH9S || isB5S;
+
+  // Build fields: name, webhookKey, tradeRelayUrl, tradeRelayWebhookCode, strategy-specific
+  const fields = [
+    ['name', 'Bot Name', bot.name, 'text'],
+    ['webhookKey', 'Webhook Key', bot.webhookKey, 'text'],
+    ['tradeRelayUrl', 'TradeRelay Bot URL', bot.tradeRelayUrl || '', 'text'],
+    ['tradeRelayWebhookCode', 'TradeRelay Webhook Code', bot.tradeRelayWebhookCode || '', 'text'],
+    ...(isH9S ? [['slippage', 'Slippage %', bot.slippage ?? 0.05, 'number']] : []),
+    ...(!isBOS ? [
+      ['source1', 'Source 1', bot.source1, 'text'],
+      ['source2', 'Source 2', bot.source2, 'text'],
+      ['source3', 'Source 3', bot.source3, 'text'],
+      ['source4', 'Source 4', bot.source4, 'text'],
+    ] : []),
+  ];
+
+  fieldsEl.innerHTML = fields.map(([key, label, value, type]) =>
+    `<label class="bot-config-field">
+      <span>${label}</span>
+      <input data-config-key="${key}" type="${type}" value="${value ?? ''}" step="${type === 'number' ? 0.01 : undefined}">
+    </label>`
+  ).join('');
+
+  // Render config JSON preview
+  const renderJson = () => {
+    const normalized = buildBotConfigJson(bot);
+    if (jsonEl) jsonEl.textContent = JSON.stringify(normalized, null, 2);
+  };
+  renderJson();
+
+  // Wire up live editing
+  fieldsEl.querySelectorAll('input').forEach((input) => {
+    const key = input.dataset.configKey;
+    const update = () => {
+      const v = input.type === 'number' ? Number(input.value) : input.value;
+      bot[key] = v;
+      renderJson();
+      renderHero();
+      renderBots();
+      renderChartBotTabsOnly();
+      if (titleEl && key === 'name') titleEl.textContent = bot.name;
+      void saveSettings();
+    };
+    input.addEventListener('change', update);
+    input.addEventListener('input', update);
+  });
+
+  // Toggle collapse
+  toggleBtn.onclick = () => {
+    const collapsed = panel.classList.toggle('is-collapsed');
+    toggleBtn.textContent = collapsed ? 'Expand' : 'Collapse';
+    toggleBtn.setAttribute('aria-expanded', String(!collapsed));
+  };
+}
+
+function buildBotConfigJson(bot) {
+  if (bot.strategy === 'h9s') {
+    return {
+      indicatorId: 'H9S', botId: bot.id, symbol: bot.symbol, timeframe: bot.timeframe,
+      webhookKey: bot.webhookKey, tradeRelayUrl: bot.tradeRelayUrl || '',
+      takeProfitPercent: Number(bot.tp), stopLossPercent: Number(bot.sl),
+      swingSize: Number(bot.threshold), bosConfType: bot.bosConfType || 'close',
+      tpType: bot.tpType || 'dynamic', slippage: Number(bot.slippage ?? 0.05),
+    };
+  } else if (bot.strategy === 'b5s') {
+    return {
+      indicatorId: 'B5S', botId: bot.id, symbol: bot.symbol, timeframe: bot.timeframe,
+      webhookKey: bot.webhookKey, tradeRelayUrl: bot.tradeRelayUrl || '',
+      takeProfitPercent: Number(bot.tp), stopLossPercent: Number(bot.sl),
+      swingSize: Number(bot.threshold), bosConfType: bot.bosConfType || 'close',
+      tpType: bot.tpType || 'dynamic', maxTrades: Number(bot.maxTrades ?? 3),
+    };
+  }
+  return {
+    indicatorId: 'AD1', botId: bot.id, symbol: bot.symbol, timeframe: bot.timeframe,
+    webhookKey: bot.webhookKey, tradeRelayUrl: bot.tradeRelayUrl || '',
+    takeProfitPercent: Number(bot.tp), stopLossPercent: Number(bot.sl),
+    unusualPercentileThreshold: Number(bot.threshold),
+    sourceSymbols: [bot.source1, bot.source2, bot.source3, bot.source4],
+  };
+}
+
+function renderChartBotTabsOnly() {
+  const tabs = document.getElementById('chart-bot-tabs');
+  if (!tabs) return;
+  const activeBotId = chartState.currentBotId || state.selectedBotId;
+  state.bots.forEach((bot) => {
+    const btn = tabs.querySelector(`[data-bot-id="${bot.id}"]`);
+    if (!btn) return;
+    btn.textContent = bot.name;
+    btn.classList.toggle('is-live', !!chartState.autoSignalByBot[bot.id]);
+    btn.classList.toggle('is-off', !chartState.autoSignalByBot[bot.id]);
   });
 }
 

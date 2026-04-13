@@ -811,6 +811,29 @@ body.is-compact .panel-header h3 {
   color: var(--text);
 }
 
+.chart-bot-tab.is-live {
+  border-color: rgba(45, 219, 117, 0.55);
+  box-shadow: 0 0 8px rgba(45, 219, 117, 0.3);
+  color: #2ddb75;
+}
+
+.chart-bot-tab.is-live.is-active {
+  background: rgba(45, 219, 117, 0.12);
+  border-color: rgba(45, 219, 117, 0.7);
+  box-shadow: 0 0 12px rgba(45, 219, 117, 0.4);
+}
+
+.chart-bot-tab.is-off {
+  border-color: rgba(247, 188, 82, 0.35);
+  color: rgba(247, 188, 82, 0.7);
+}
+
+.chart-bot-tab.is-off.is-active {
+  background: rgba(247, 188, 82, 0.08);
+  border-color: rgba(247, 188, 82, 0.5);
+  color: #f7bc52;
+}
+
 .chart-symbol-info {
   display: flex;
   align-items: center;
@@ -1400,12 +1423,76 @@ body.is-compact .panel-header h3 {
   font-size: 18px;
 }
 
-.chart-collapsible.is-collapsed .chart-trade-log {
+.chart-collapsible.is-collapsed .chart-trade-log,
+.chart-collapsible.is-collapsed .chart-bot-config-body {
   display: none;
 }
 
 .chart-collapsible.is-collapsed {
   padding-bottom: 10px;
+}
+
+.chart-bot-config-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.chart-bot-config-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.bot-config-field {
+  display: grid;
+  gap: 5px;
+  min-width: 200px;
+  flex: 1;
+}
+
+.bot-config-field span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bot-config-field input {
+  background: rgba(4, 11, 18, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.bot-config-field input:focus {
+  outline: none;
+  border-color: rgba(39, 211, 197, 0.4);
+}
+
+.chart-bot-config-preview {
+  min-width: 260px;
+}
+
+.config-preview-inline {
+  background: rgba(4, 11, 18, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: #7f91a4;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
 }
 
 .chart-replay-analytics {
