@@ -281,6 +281,21 @@ const state = {
       sl: 1.2,       // ATR multiplier for SL
       threshold: 9,  // ZigZag pivot half-window (bars each side)
     },
+    {
+      id: 'fg1-btc-4h',
+      name: 'FG1 / CVD + FVG Retracement',
+      symbol: 'BTCUSDT',
+      timeframe: '4h',
+      strategy: 'fg1',
+      webhookKey: 'FG1_BTC',
+      tradeRelayUrl: '',
+      tradeRelayWebhookCode: '',
+      status: 'Replay',
+      winRate: 0, netPl: 0, drawdown: 0, trades: 0,
+      tp: 2.0,       // ATR multiplier for TP
+      sl: 1.5,       // ATR multiplier for SL
+      threshold: 20, // CVD rolling window (bars)
+    },
   ],
   scenarios: [
     {
@@ -2886,6 +2901,127 @@ function runOB1Strategy(candles, bot) {
   return { markers, tradeLog, openTrade };
 }
 
+// ── FG1 — CVD + FVG Retracement ──────────────────────────────────────────────
+// Inspired by: SPMANUEL2 CVD Strategy (FluxCharts / fluxchart)
+// Three-phase confirmation from the Pine script:
+//   1. Rolling CVD (close>open → +vol, else -vol) crossover above/below 0
+//      gives the directional bias  (approximates Pine's ta.requestVolumeDelta).
+//   2. The first 3-bar Fair Value Gap that forms AFTER the CVD signal and
+//      in the SAME direction is captured as the entry zone.
+//      Bullish FVG: candle[-2].high < candle[0].low  (gap up imbalance)
+//      Bearish FVG: candle[-2].low  > candle[0].high (gap down imbalance)
+//      Zone must be > 0.2 × ATR (size filter mirrors Pine's fvgSensitivity).
+//   3. Entry when close RETRACES into the FVG zone; zone invalidated if price
+//      closes beyond its far edge (matching Pine's fvgEndMethod = "Close").
+//   TP / SL remain ATR-multiplier based.
+function runFG1Strategy(candles, bot) {
+  const cvdLen  = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult  = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult  = Math.max(0.3, Number(bot.sl || 1.5));
+  const markers  = [];
+  const tradeLog = [];
+  let openTrade  = null;
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  function calcCVD(endIdx) {
+    let cvd = 0;
+    for (let j = Math.max(0, endIdx - cvdLen + 1); j <= endIdx; j++) {
+      const c = candles[j];
+      cvd += c.close >= c.open ? Math.max(c.volume || 1, 1) : -Math.max(c.volume || 1, 1);
+    }
+    return cvd;
+  }
+
+  const warmup  = cvdLen + 14 + 5;
+  let position  = null;
+  let fvgZone   = null; // { dir, top, bottom } — active FVG awaiting retracement
+  let signalDir = null; // 'long' | 'short' from last CVD cross
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const atr  = calcATR(i);
+    const cvd  = calcCVD(i);
+    const cvdP = calcCVD(i - 1);
+
+    // ── Exit management ──
+    if (position && i > position.entryIndex) {
+      const tpHit = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const slHit = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (tpHit || slHit) {
+        const reason    = tpHit ? 'tp' : 'sl';
+        const exitPrice = tpHit ? position.tp : position.sl;
+        const pl = position.dir === 'long'
+          ? ((exitPrice - position.entry) / position.entry) * 100
+          : ((position.entry - exitPrice) / position.entry) * 100;
+        tradeLog.push({ ...position, exit: exitPrice, pl, reason, exitTime: bar.time, exitIndex: i });
+        markers.push({ time: bar.time, position: 'aboveBar', color: tpHit ? '#2ddb75' : '#ff6d6d', shape: 'square', text: reason.toUpperCase(), size: 0.5 });
+        openTrade = null;
+        position  = null;
+        fvgZone   = null;
+        signalDir = null;
+      }
+    }
+
+    // ── CVD crossover detection ──
+    if (!position) {
+      if (cvdP <= 0 && cvd > 0) { signalDir = 'long';  fvgZone = null; }
+      if (cvdP >= 0 && cvd < 0) { signalDir = 'short'; fvgZone = null; }
+    }
+
+    // ── FVG detection (requires i >= 2) ──
+    if (!position && signalDir && !fvgZone && i >= 2) {
+      const c0 = candles[i], c2 = candles[i - 2];
+      if (signalDir === 'long' && c2.high < c0.low && (c0.low - c2.high) > atr * 0.2) {
+        // Bullish FVG: gap between c2.high and c0.low
+        fvgZone = { dir: 'long', top: c0.low, bottom: c2.high };
+      } else if (signalDir === 'short' && c2.low > c0.high && (c2.low - c0.high) > atr * 0.2) {
+        // Bearish FVG: gap between c0.high and c2.low
+        fvgZone = { dir: 'short', top: c2.low, bottom: c0.high };
+      }
+    }
+
+    // ── FVG zone invalidation (close beyond far edge) ──
+    if (fvgZone && !position) {
+      if (fvgZone.dir === 'long'  && bar.close < fvgZone.bottom) fvgZone = null;
+      if (fvgZone.dir === 'short' && bar.close > fvgZone.top)    fvgZone = null;
+    }
+
+    // ── Entry: retracement close inside FVG zone ──
+    if (!position && fvgZone) {
+      if (bar.close >= fvgZone.bottom && bar.close <= fvgZone.top) {
+        const entry = bar.close;
+        if (fvgZone.dir === 'long') {
+          position = { dir: 'long', entry, tp: entry + atr * tpMult, sl: entry - atr * slMult, entryIndex: i, entryTime: bar.time };
+          tradeLog.push({ dir: 'long', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+          markers.push({ time: bar.time, position: 'belowBar', color: '#2ddb75', shape: 'arrowUp', text: 'L', size: 1 });
+        } else {
+          position = { dir: 'short', entry, tp: entry - atr * tpMult, sl: entry + atr * slMult, entryIndex: i, entryTime: bar.time };
+          tradeLog.push({ dir: 'short', entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: bar.time, exitTime: null, entryIndex: i, exitIndex: null });
+          markers.push({ time: bar.time, position: 'aboveBar', color: '#ff6d6d', shape: 'arrowDown', text: 'S', size: 1 });
+        }
+        fvgZone   = null;
+        signalDir = null;
+      }
+    }
+  }
+
+  if (position) {
+    openTrade = { entry: position.entry, tp: position.tp, sl: position.sl, dir: position.dir };
+    tradeLog.push({ dir: position.dir, entry: position.entry, tp: position.tp, sl: position.sl, exit: null, pl: null, reason: 'open', entryTime: position.entryTime, exitTime: null, entryIndex: position.entryIndex, exitIndex: null });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  return { markers, tradeLog, openTrade };
+}
+
 function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'h9s') return runH9SStrategy(candles, bot);
   if (bot.strategy === 'b5s') return runB5SStrategy(candles, bot);
@@ -2901,6 +3037,7 @@ function runStrategySimulation(candles, bot) {
   if (bot.strategy === 'ch1') return runCH1Strategy(candles, bot);
   if (bot.strategy === 'pm1') return runPM1Strategy(candles, bot);
   if (bot.strategy === 'ob1') return runOB1Strategy(candles, bot);
+  if (bot.strategy === 'fg1') return runFG1Strategy(candles, bot);
   const markers = [];
   const tradeLog = [];
   let openTrade = null;
@@ -3888,7 +4025,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
   const isAI2 = bot.strategy === 'ai2';
   const isAI3 = bot.strategy === 'ai3';
   const isAI  = isAI1 || isAI2 || isAI3;
-  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1';
+  const isATR = isAI || bot.strategy === 'vw1' || bot.strategy === 'kc1' || bot.strategy === 'dv1' || bot.strategy === 'rs1' || bot.strategy === 'e3' || bot.strategy === 'cv1' || bot.strategy === 'ch1' || bot.strategy === 'pm1' || bot.strategy === 'ob1' || bot.strategy === 'fg1';
 
   const atrThLabel =
     isAI1              ? 'RSI'
@@ -3903,6 +4040,7 @@ function renderOptimizerResults(candidates, bot, tpInput, slInput, thresholdInpu
     : bot.strategy === 'ch1' ? 'Swing'
     : bot.strategy === 'pm1' ? 'RSI Pd'
     : bot.strategy === 'ob1' ? 'ZigLen'
+    : bot.strategy === 'fg1' ? 'CVD Len'
     : 'Th';
 
   container.innerHTML = candidates
@@ -4493,8 +4631,8 @@ function setupChartParameterLab(bot) {
     slInput.value = String(best.sl);
     thresholdInput.value = String(best.threshold);
     const isBOSBest = bot.strategy === 'h9s' || bot.strategy === 'b5s';
-    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1'].includes(bot.strategy);
-    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : 'Th';
+    const isATRBest = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1','fg1'].includes(bot.strategy);
+    const atrThLblB = bot.strategy === 'ai1' ? 'RSI' : bot.strategy === 'ai2' ? 'Squeeze%' : bot.strategy === 'ai3' ? 'Stoch' : bot.strategy === 'vw1' ? 'Dev%' : bot.strategy === 'kc1' ? 'EMA' : bot.strategy === 'dv1' ? 'DC' : bot.strategy === 'rs1' ? 'ROC' : bot.strategy === 'e3' ? 'RangePd' : bot.strategy === 'cv1' ? 'CVD Win' : bot.strategy === 'ch1' ? 'Swing' : bot.strategy === 'pm1' ? 'RSI Pd' : bot.strategy === 'ob1' ? 'ZigLen' : bot.strategy === 'fg1' ? 'CVD Len' : 'Th';
     const bestLabel = isBOSBest
       ? `Swing ${best.threshold} / ${best.bosConfType} / ${best.tpType}${bot.strategy === 'b5s' ? ` / ${best.maxTrades ?? 3}T` : ''}`
       : isATRBest

@@ -1132,6 +1132,86 @@ function signalCode(bot, event) {
   return `${event.replace(/_/g, '-')}_${code}`;
 }
 
+// ── FG1 — CVD + FVG Retracement ─────────────────────────────────────────────
+
+function runFG1(candles, bot) {
+  const cvdLen  = Math.max(5, Math.round(Number(bot.threshold || 20)));
+  const tpMult  = Math.max(0.5, Number(bot.tp || 2.0));
+  const slMult  = Math.max(0.3, Number(bot.sl || 1.5));
+
+  function calcATR(i) {
+    const p = 14; if (i < 1) return candles[i].close * 0.015;
+    let sum = 0, n = 0;
+    for (let j = Math.max(1, i - p + 1); j <= i; j++) {
+      const c = candles[j], q = candles[j - 1];
+      sum += Math.max(c.high - c.low, Math.abs(c.high - q.close), Math.abs(c.low - q.close)); n++;
+    }
+    return n ? sum / n : candles[i].close * 0.015;
+  }
+
+  function calcCVD(endIdx) {
+    let cvd = 0;
+    for (let j = Math.max(0, endIdx - cvdLen + 1); j <= endIdx; j++) {
+      const c = candles[j];
+      cvd += c.close >= c.open ? Math.max(c.volume || 1, 1) : -Math.max(c.volume || 1, 1);
+    }
+    return cvd;
+  }
+
+  const signals  = [];
+  const warmup   = cvdLen + 14 + 5;
+  let position   = null;
+  let fvgZone    = null;
+  let signalDir  = null;
+
+  for (let i = warmup; i < candles.length; i++) {
+    const bar  = candles[i];
+    const atr  = calcATR(i);
+    const cvd  = calcCVD(i);
+    const cvdP = calcCVD(i - 1);
+
+    if (position && i > position.entryIndex) {
+      const hitTP = position.dir === 'long' ? bar.high >= position.tp : bar.low  <= position.tp;
+      const hitSL = position.dir === 'long' ? bar.low  <= position.sl : bar.high >= position.sl;
+      if (hitTP || hitSL) {
+        signals.push({ time: bar.time, event: 'EXIT_ALL', dir: position.dir, kind: 'exit' });
+        position = null; fvgZone = null; signalDir = null;
+      }
+    }
+
+    if (!position) {
+      if (cvdP <= 0 && cvd > 0) { signalDir = 'long';  fvgZone = null; }
+      if (cvdP >= 0 && cvd < 0) { signalDir = 'short'; fvgZone = null; }
+    }
+
+    if (!position && signalDir && !fvgZone && i >= 2) {
+      const c0 = candles[i], c2 = candles[i - 2];
+      if (signalDir === 'long'  && c2.high < c0.low && (c0.low - c2.high) > atr * 0.2) {
+        fvgZone = { dir: 'long',  top: c0.low,  bottom: c2.high };
+      } else if (signalDir === 'short' && c2.low > c0.high && (c2.low - c0.high) > atr * 0.2) {
+        fvgZone = { dir: 'short', top: c2.low,  bottom: c0.high };
+      }
+    }
+
+    if (fvgZone && !position) {
+      if (fvgZone.dir === 'long'  && bar.close < fvgZone.bottom) fvgZone = null;
+      if (fvgZone.dir === 'short' && bar.close > fvgZone.top)    fvgZone = null;
+    }
+
+    if (!position && fvgZone && bar.close >= fvgZone.bottom && bar.close <= fvgZone.top) {
+      if (fvgZone.dir === 'long') {
+        position = { dir: 'long',  tp: bar.close + atr * tpMult, sl: bar.close - atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_LONG',  dir: 'long',  kind: 'entry' });
+      } else {
+        position = { dir: 'short', tp: bar.close - atr * tpMult, sl: bar.close + atr * slMult, entryIndex: i };
+        signals.push({ time: bar.time, event: 'ENTER_SHORT', dir: 'short', kind: 'entry' });
+      }
+      fvgZone = null; signalDir = null;
+    }
+  }
+  return signals;
+}
+
 // ── TradeRelay fire ───────────────────────────────────────────────────────────
 
 async function fireTradeRelay(url, code) {
@@ -1241,6 +1321,7 @@ export default async function handler(req, res) {
         else if (strategy === 'ch1')  signals = runCH1(candles, bot);
         else if (strategy === 'pm1')  signals = runPM1(candles, bot);
         else if (strategy === 'ob1')  signals = runOB1(candles, bot);
+        else if (strategy === 'fg1')  signals = runFG1(candles, bot);
         else                          signals = runAD1(candles, bot);
 
         // Only process entry signals newer than last_fired
