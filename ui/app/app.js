@@ -4813,9 +4813,13 @@ function setupChartParameterLab(bot) {
     fieldsHTML += `<label class="param-field"><span>BOS Conf.</span><select id="chart-param-bos-conf"><option value="close"${(bot.bosConfType||'close')==='close'?' selected':''}>close</option><option value="wicks"${(bot.bosConfType||'close')==='wicks'?' selected':''}>wicks</option></select></label>`;
     fieldsHTML += `<label class="param-field"><span>TP Type</span><select id="chart-param-tp-type"><option value="dynamic"${(bot.tpType||'dynamic')==='dynamic'?' selected':''}>dynamic</option><option value="fixed"${(bot.tpType||'dynamic')==='fixed'?' selected':''}>fixed</option></select></label>`;
   }
+  const isATRStrat = ['ai1','ai2','ai3','vw1','kc1','dv1','rs1','e3','cv1','ch1','pm1','ob1','fg1','sm1','mn1','st1','sb1'].includes(bot.strategy);
+  const tpLabel = isATRStrat ? 'TP ×ATR' : 'TP %';
+  const slLabel = isATRStrat ? 'SL ×ATR' : 'SL %';
+
   if (!isBOS || bosFixed) {
-    fieldsHTML += `<label class="param-field"><span>TP %</span><input id="chart-param-tp" type="number" step="0.1" min="0.1" max="25" value="${bot.tp}"></label>`;
-    fieldsHTML += `<label class="param-field"><span>SL %</span><input id="chart-param-sl" type="number" step="0.1" min="0.1" max="40" value="${bot.sl}"></label>`;
+    fieldsHTML += `<label class="param-field"><span>${tpLabel}</span><input id="chart-param-tp" type="number" step="0.1" min="0.1" max="25" value="${bot.tp}"></label>`;
+    fieldsHTML += `<label class="param-field"><span>${slLabel}</span><input id="chart-param-sl" type="number" step="0.1" min="0.1" max="40" value="${bot.sl}"></label>`;
   }
   if (isB5S) {
     fieldsHTML += `<label class="param-field"><span>Max Trades</span><input id="chart-param-max-trades" type="number" step="1" min="1" max="10" value="${bot.maxTrades ?? 3}"></label>`;
