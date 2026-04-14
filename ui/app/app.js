@@ -4543,8 +4543,9 @@ function applyParamsToChart(bot) {
 //
 // The composite score is dimensionless and suitable for cross-strategy ranking.
 function scoreOptimizationCandidate(summary) {
-  // Gate on trade count — ramp from 0.15 at 1 trade to 1.0 at 40+ trades
-  const tradeFactor = Math.max(0.15, Math.min(1.0, summary.trades / 40));
+  // Gate on trade count — ramp from 0.15 at 1 trade to 1.0 at 30+ trades
+  // (30 is a statistically meaningful sample; ATR/swing strategies rarely hit 40 on higher TFs)
+  const tradeFactor = Math.max(0.15, Math.min(1.0, summary.trades / 30));
 
   // Sortino (downside-adjusted return per trade); cap at ±6 to prevent domination
   const sortinoScore = Math.max(-6, Math.min(6, summary.sortino ?? 0)) * 6;
@@ -4571,7 +4572,12 @@ function scoreOptimizationCandidate(summary) {
   // Return volatility penalty: punishes lucky outliers that inflate avg
   const stdPenalty = (summary.netPlStdDev ?? 0) * 0.35;
 
-  const raw = sortinoScore + pfScore + rfScore + expScore + wrEdge + consistencyBonus - ddPenalty - stdPenalty;
+  // Maximum consecutive losses penalty — anything beyond 5 consecutive losses
+  // signals a period of sustained edge failure; quadratic beyond 7 to strongly penalise
+  const mcl = summary.maxConsecLosses ?? 0;
+  const maxClPenalty = mcl <= 5 ? 0 : mcl <= 7 ? (mcl - 5) * 0.8 : 1.6 + (mcl - 7) * 1.8;
+
+  const raw = sortinoScore + pfScore + rfScore + expScore + wrEdge + consistencyBonus - ddPenalty - stdPenalty - maxClPenalty;
   return raw * tradeFactor;
 }
 
@@ -5121,6 +5127,81 @@ function setupChartParameterLab(bot) {
           }
         }
       }
+    } else if (bot.strategy === 'pm1') {
+      // RSI Pivot Momentum: TP/SL ATR multipliers + RSI period
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 3.5];
+      const slCandidates = [0.7, 0.9, 1.1, 1.4, 1.8];
+      const thCandidates = [9, 11, 14, 18, 21]; // RSI period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'ob1') {
+      // Order Block Retest: TP/SL ATR multipliers + ZigZag half-window
+      const tpCandidates = [2.0, 2.5, 3.0, 4.0, 5.0];
+      const slCandidates = [0.8, 1.0, 1.3, 1.7, 2.2];
+      const thCandidates = [5, 7, 10, 14, 20]; // ZigZag half-window
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'fg1') {
+      // CVD + FVG Retracement: TP/SL ATR multipliers + CVD observation window
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
+      const slCandidates = [0.7, 1.0, 1.2, 1.5, 2.0];
+      const thCandidates = [10, 15, 20, 30, 50]; // CVD observation window
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'sm1' || bot.strategy === 'mn1' || bot.strategy === 'sb1') {
+      // Smart Money BOS family: TP/SL dist multipliers + swing pivot half-window
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
+      const slCandidates = [0.6, 0.8, 1.0, 1.3, 1.7];
+      const thCandidates = [10, 15, 20, 25, 30]; // swing pivot half-window
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
+    } else if (bot.strategy === 'st1') {
+      // SuperTrend Flip: RR ratio (tp) + ATR factor (sl) + ST ATR period (threshold)
+      const tpCandidates = [1.5, 2.0, 2.5, 3.0, 4.0];
+      const slCandidates = [0.8, 1.1, 1.4, 1.8, 2.2];
+      const thCandidates = [7, 10, 14, 18, 21]; // SuperTrend ATR period
+      for (const tp of tpCandidates) {
+        for (const sl of slCandidates) {
+          for (const threshold of thCandidates) {
+            const testBot = { ...bot, tp, sl, threshold };
+            const avgSummary = averageSummaries(sources.map(s => buildReplayPackageFromCandles(s.candles, s.volumes, testBot).summary));
+            const score = scoreOptimizationCandidate(avgSummary);
+            candidates.push({ tp, sl, threshold, summary: avgSummary, score });
+          }
+        }
+      }
     } else {
       const tpCandidates = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.2, 3.0];
       const slCandidates = [1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 9.0, 12.0];
@@ -5143,7 +5224,9 @@ function setupChartParameterLab(bot) {
     feedback.textContent = 'Refining top candidates…';
     const tpStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.1 : 0.2;
     const slStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.25 : 0.5;
-    const thStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 5   : 2;
+    const thStep   = (bot.strategy === 'h9s' || bot.strategy === 'b5s') ? 5
+                   : (bot.strategy === 'cv1' || bot.strategy === 'fg1') ? 5
+                   : 2;
     const TOP_N = Math.min(5, candidates.length);
     for (let ci = 0; ci < TOP_N; ci++) {
       const seed = candidates[ci];
