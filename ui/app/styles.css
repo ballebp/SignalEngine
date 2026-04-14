@@ -1323,6 +1323,55 @@ body.is-compact .panel-header h3 {
   color: var(--amber);
 }
 
+/* ── Optimizer loading states ───────────────────────────────────────── */
+@keyframes opt-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes opt-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+#chart-optimize-params.is-optimizing {
+  pointer-events: none;
+  opacity: 0.75;
+  position: relative;
+  padding-left: 28px;
+}
+#chart-optimize-params.is-optimizing::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(39, 211, 197, 0.35);
+  border-top-color: #27d3c5;
+  border-radius: 50%;
+  animation: opt-spin 0.75s linear infinite;
+}
+
+.param-feedback.loading {
+  animation: opt-pulse 1.2s ease-in-out infinite;
+  color: var(--teal);
+}
+
+.opt-progress-bar {
+  grid-column: 1 / -1;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(39, 211, 197, 0.12);
+  overflow: hidden;
+  margin-top: -4px;
+}
+.opt-progress-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #27d3c5, #63eac6);
+  transition: width 0.4s ease;
+}
+
 .optimizer-results {
   grid-column: 1 / -1;
   display: grid;

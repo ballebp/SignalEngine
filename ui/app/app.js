@@ -4899,9 +4899,26 @@ function setupChartParameterLab(bot) {
   };
 
   optimizeButton.onclick = async () => {
-    feedback.className = 'param-feedback';
-    feedback.textContent = 'Fetching data for optimizer…';
-    optimizeButton.disabled = true;
+    const progressBar  = document.getElementById('opt-progress-bar');
+    const progressFill = document.getElementById('opt-progress-fill');
+    const setProgress = (pct) => { if (progressFill) progressFill.style.width = pct + '%'; };
+    const startLoading = (msg) => {
+      optimizeButton.disabled = true;
+      optimizeButton.classList.add('is-optimizing');
+      optimizeButton.textContent = msg;
+      feedback.className = 'param-feedback loading';
+      feedback.textContent = msg;
+      if (progressBar) progressBar.style.display = 'block';
+      setProgress(0);
+    };
+    const stopLoading = () => {
+      optimizeButton.disabled = false;
+      optimizeButton.classList.remove('is-optimizing');
+      optimizeButton.textContent = 'AI Optimize';
+      if (progressBar) progressBar.style.display = 'none';
+      setProgress(0);
+    };
+    startLoading('Fetching data…');
     // Fetch 4 chunks spread across the past 2 years IN PARALLEL for speed
     const twoYearsMs = 2 * 365 * 24 * 60 * 60 * 1000;
     const sources = [];
@@ -4917,8 +4934,9 @@ function setupChartParameterLab(bot) {
         tryFetch(null),          // most recent chunk always included
         ...randomEnds.map(e => tryFetch(e)),
       ]);
-    } finally {
-      optimizeButton.disabled = false;
+    } catch {
+      stopLoading();
+      return;
     }
     if (!sources.length) {
       const fb = chartState.data
@@ -4927,7 +4945,11 @@ function setupChartParameterLab(bot) {
       sources.push(fb);
     }
     const totalBars = sources.reduce((sum, s) => sum + s.candles.length, 0);
+    setProgress(15);
     feedback.textContent = `Optimizing across ${sources.length} periods (${totalBars.toLocaleString()} bars)…`;
+    optimizeButton.textContent = 'Optimizing…';
+    // Yield to paint the progress update before heavy sync work
+    await new Promise(r => setTimeout(r, 0));
     const candidates = [];
 
     if (bot.strategy === 'h9s') {
@@ -5221,7 +5243,10 @@ function setupChartParameterLab(bot) {
     candidates.sort((a, b) => b.score - a.score);
 
     // ── Genetic refinement pass ──────────────────────────────────────────────
+    setProgress(72);
     feedback.textContent = 'Refining top candidates…';
+    optimizeButton.textContent = 'Refining…';
+    await new Promise(r => setTimeout(r, 0));
     const tpStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.1 : 0.2;
     const slStep   = bot.strategy === 'h9s' || bot.strategy === 'b5s' ? 0.25 : 0.5;
     const thStep   = (bot.strategy === 'h9s' || bot.strategy === 'b5s') ? 5
@@ -5254,10 +5279,14 @@ function setupChartParameterLab(bot) {
     }
     candidates.sort((a, b) => b.score - a.score);
     // ────────────────────────────────────────────────────────────────────────
+    setProgress(100);
+    await new Promise(r => setTimeout(r, 120)); // let the bar flash to 100% before hiding
+    stopLoading();
 
     const best = candidates[0];
 
     if (!best) {
+      stopLoading();
       feedback.className = 'param-feedback warn';
       feedback.textContent = 'AI optimize could not evaluate candidate sets.';
       renderOptimizerResults([], bot, tpInput, slInput, thresholdInput, feedback, sources[0]);
