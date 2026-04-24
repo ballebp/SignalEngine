@@ -1647,10 +1647,24 @@ export default async function handler(req, res) {
     const aiGateThreshold = parseInt(settingsMap['ai_gate_threshold'] || '65', 10);
 
     for (const bot of activeBots) {
-      const cronState = stateMap[bot.id] || { bot_id: bot.id, last_fired: 0 };
-      const lastFired = Number(cronState.last_fired) || 0;
+      const now = Math.floor(Date.now() / 1000);
+      const isNewBot = !stateMap[bot.id];
+      const cronState = stateMap[bot.id] || { bot_id: bot.id, last_fired: now };
+      const lastFired = Number(cronState.last_fired) || now;
 
       try {
+        // For new bots, immediately persist the seeded last_fired so that if this
+        // run times out the historical-signal flood can never repeat.
+        if (isNewBot) {
+          await sbUpsert('cron_state', {
+            bot_id: bot.id,
+            last_fired: lastFired,
+            last_run: new Date().toISOString(),
+            last_status: 'initialized',
+            last_message: 'First run — seeded to current time',
+          }).catch(() => {});
+        }
+
         // Fetch candles — enough for the strategy to warm up
         const rawRows = await fetchCandles(bot.symbol, bot.timeframe, 500);
         const candles  = parseCandles(rawRows);
