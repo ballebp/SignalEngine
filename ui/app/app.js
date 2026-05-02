@@ -5896,6 +5896,16 @@ function setupSimSettings() {
 loadSimSettings();
 loadAiGateSettings();
 loadSavedSettings().then(() => {
+  // Seed autoSignalByBot for every bot that has autoSignal persisted,
+  // so all tabs render the correct green/off state without needing initChart first.
+  state.bots.forEach((bot) => {
+    if (bot.autoSignal && chartState.autoSignalByBot[bot.id] === undefined) {
+      chartState.autoSignalByBot[bot.id] = true;
+      if (!chartState.lastFiredByBot[bot.id]) {
+        chartState.lastFiredByBot[bot.id] = Math.floor(Date.now() / 1000);
+      }
+    }
+  });
   renderAll();
   renderSignalTable();
   updateStatusDots();
