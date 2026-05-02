@@ -1628,7 +1628,7 @@ export default async function handler(req, res) {
     // Load all bot configs from Supabase
     const botRows = await sbGet('bots');
     const activeBots = botRows
-      .map(r => r.config || {})
+      .map(r => ({ ...(r.config || {}), id: r.id }))
       .filter(cfg => cfg.id && cfg.autoSignal && cfg.tradeRelayUrl && cfg.symbol && cfg.timeframe);
 
     if (!activeBots.length) {

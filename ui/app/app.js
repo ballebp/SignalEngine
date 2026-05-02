@@ -5709,6 +5709,7 @@ function botToRow(bot) {
   return {
     id: bot.id,
     config: {
+      id: bot.id,
       name: bot.name, symbol: bot.symbol, timeframe: bot.timeframe,
       webhookKey: bot.webhookKey, tradeRelayUrl: bot.tradeRelayUrl,
       tradeRelayWebhookCode: bot.tradeRelayWebhookCode,
