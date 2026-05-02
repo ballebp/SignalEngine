@@ -5711,6 +5711,7 @@ function botToRow(bot) {
     config: {
       id: bot.id,
       name: bot.name, symbol: bot.symbol, timeframe: bot.timeframe,
+      strategy: bot.strategy || 'ad1',
       webhookKey: bot.webhookKey, tradeRelayUrl: bot.tradeRelayUrl,
       tradeRelayWebhookCode: bot.tradeRelayWebhookCode,
       tp: bot.tp, sl: bot.sl, threshold: bot.threshold,
@@ -5727,7 +5728,7 @@ function botToRow(bot) {
 function applyBotRow(row) {
   const bot = state.bots.find((b) => b.id === row.id);
   if (!bot || !row.config) return;
-  const editable = ['name', 'symbol', 'timeframe', 'webhookKey', 'tradeRelayUrl',
+  const editable = ['name', 'symbol', 'timeframe', 'strategy', 'webhookKey', 'tradeRelayUrl',
     'tradeRelayWebhookCode', 'tp', 'sl', 'threshold',
     'source1', 'source2', 'source3', 'source4',
     'bosConfType', 'tpType', 'slippage', 'maxTrades',
